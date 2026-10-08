@@ -6,23 +6,107 @@ está corriendo pruebas. Spec completa: [`spec-laboratorio-devops-ccuc.md`](spec
 
 ## Requisitos previos
 
-- Docker + Docker Compose
-- Python 3.12
+- **Docker** con Compose v2 (Docker Desktop ≥ 4.0 o Docker Engine + plugin). Verifica:
+  ```bash
+  docker compose version && docker info   # el daemon debe estar encendido
+  ```
+- **Puertos libres** en tu máquina: `4566` (LocalStack), `8182` (Gremlin), `9200` (OpenSearch).
+- **Python 3.12** (solo si vas a correr pytest fuera del contenedor o el CDK).
 - (opcional) AWS CLI v2 + [`awslocal`](https://github.com/localstack/awscli-local): `pip install awscli-local`
 - (solo despliegue) Node.js 22+ para el CDK CLI (`npx aws-cdk`)
 
-## Inicio rápido
+> Si tu Docker solo tiene el plugin antiguo, reemplaza `docker compose` por `docker-compose`
+> en todos los comandos.
+
+## Levantar el laboratorio (paso a paso)
+
+### 1. Clonar el repo
 
 ```bash
-git clone <repo> && cd ccuc-motor-grafos
-docker-compose up -d          # levanta todo el laboratorio
-docker-compose ps             # los 4 contenedores deben quedar (healthy)
+git clone https://github.com/MoonshineZack/ccuc-motor-grafos.git
+cd ccuc-motor-grafos
 ```
 
-Al arrancar, `scripts/init-aws.sh` crea solo (sin intervención manual):
+### 2. Levantar todo con un solo comando
 
-- Cola `ccuc-novedades-prod.fifo` (dedup por contenido) + su DLQ `ccuc-novedades-dlq.fifo`
-- Buckets S3 `ccuc-landing` y `ccuc-staging`
+```bash
+docker compose up -d
+```
+
+> **Primera vez:** se descargan ~2 GB de imágenes (LocalStack, OpenSearch, Gremlin,
+> Python 3.12) y se construye la imagen de `dev-motor-reglas`; toma unos minutos.
+> Corridas siguientes arrancan en menos de 1 minuto.
+
+### 3. Verificar que los 4 contenedores estén healthy
+
+```bash
+docker compose ps
+```
+
+Salida esperada (los 4 en `(healthy)`):
+
+| Contenedor | Servicio | Puerto |
+|---|---|---|
+| `dev-localstack` | LocalStack: SQS, S3, EventBridge | 4566 |
+| `dev-gremlin` | Gremlin Server (simula Neptune) | 8182 |
+| `dev-opensearch` | OpenSearch single-node, sin seguridad | 9200 |
+| `dev-motor-reglas` | Microservicio con hot-reloading | — |
+
+Si alguno queda `(unhealthy)` o `Exited`: revisa sus logs con
+`docker compose logs <nombre-del-contenedor>`.
+
+### 4. Verificar que los recursos se crearon solos (sin intervención manual)
+
+```bash
+# Cola FIFO + DLQ
+docker compose exec dev-localstack awslocal sqs list-queues
+# Buckets S3
+docker compose exec dev-localstack awslocal s3api list-buckets --query 'Buckets[].Name' --output text
+```
+
+Debe aparecer exactamente:
+- Colas: `ccuc-novedades-prod.fifo` y `ccuc-novedades-dlq.fifo`
+- Buckets: `ccuc-landing` y `ccuc-staging`
+
+Comprobación extra de la cola principal (deduplicación + DLQ):
+
+```bash
+docker compose exec dev-localstack awslocal sqs get-queue-attributes \
+  --queue-url http://localhost:4566/000000000000/ccuc-novedades-prod.fifo \
+  --attribute-names FifoQueue ContentBasedDeduplication RedrivePolicy --output table
+```
+
+### 5. Verificar los endpoints
+
+```bash
+curl -s http://localhost:9200                                  # OpenSearch responde (JSON con "version")
+curl -s http://localhost:4566/_localstack/health               # LocalStack health
+docker compose exec dev-motor-reglas python -c \
+  "import socket; socket.create_connection(('dev-gremlin',8182),3); print('Gremlin OK')"
+```
+
+Los endpoints completos están en la tabla de abajo.
+
+### 6. Verificar el hot-reloading
+
+```bash
+echo "# prueba-hot-reload" >> src/motor_reglas/core.py
+docker compose exec dev-motor-reglas grep -c "prueba-hot-reload" /app/motor_reglas/core.py
+# debe imprimir 1 → el cambio en tu IDE ya está dentro del contenedor
+sed -i '$ d' src/motor_reglas/core.py   # deshacer la línea de prueba
+```
+
+Si los 6 pasos pasaron, el laboratorio está listo. Sigue con
+[Flujo de desarrollo](#flujo-de-desarrollo) o [Pruebas](#pruebas-obligatorias-antes-de-push).
+
+## Apagar y reiniciar
+
+```bash
+docker compose stop      # detiene los contenedores conservando su estado
+docker compose start     # los vuelve a levantar (siguen las colas/buckets)
+docker compose down      # borra los contenedores; nada se pierde: al volver a
+                         # `up -d`, init-aws.sh recrea colas y buckets solos
+```
 
 ## Endpoints locales
 
@@ -68,6 +152,19 @@ Dos pruebas son **críticas** y el pipeline las convierte en bloqueo de merge:
 
 > El equipo de desarrollo implementa la lógica real dentro de `src/motor_reglas/core.py`;
 > la infraestructura para ejecutarlas ya está lista.
+
+## Solución de problemas
+
+| Síntoma | Causa probable | Solución |
+|---|---|---|
+| `docker: Cannot connect to the Docker daemon` | Docker apagado | Enciende Docker Desktop (o `sudo systemctl start docker`) |
+| `port is already allocated` | Puerto 4566/8182/9200 en uso | Identifica con `lsof -i :4566` y detén el proceso, o cambia el puerto en `docker-compose.yml` |
+| Algún contenedor `(unhealthy)` | Servicio tardó en arrancar o falló | `docker compose logs <nombre>`; si persiste: `docker compose up -d --force-recreate <nombre>` |
+| No existen las colas/buckets | `init-aws.sh` falló | `docker compose logs dev-localstack` (busca `[init-aws]`); rerun manual: `docker compose exec dev-localstack bash /etc/localstack/init/ready.d/init-aws.sh` |
+| El consumidor no recibe mensajes | URL de cola inalcanzable o cola vacía | Verifica `QUEUE_URL=http://dev-localstack:4566/...` en el compose y envía un mensaje de prueba (paso 4 de *Flujo de desarrollo*) |
+| Mensaje "no aparece" en la cola | Deduplicación de contenido (ventana de 5 min) | Cambia el cuerpo del mensaje (distinto `nonce`); es el comportamiento esperado |
+| `pytest: command not found` fuera del contenedor | Dependencias no instaladas | `pip install -r requirements.txt` (o corre los tests dentro del contenedor como está arriba) |
+| Primer `docker compose up` muy lento | Descarga de ~2 GB de imágenes | Espera; solo pasa la primera vez |
 
 ## Despliegue (CI/CD)
 

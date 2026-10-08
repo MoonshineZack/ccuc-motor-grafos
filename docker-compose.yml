@@ -1,6 +1,6 @@
 # Laboratorio local CCUC (spec 5.2): un solo comando levanta el entorno completo.
 services:
-  localstack:
+  dev-localstack:
     image: localstack/localstack:4.1.1
     container_name: dev-localstack
     ports:
@@ -16,7 +16,7 @@ services:
       timeout: 5s
       retries: 12
 
-  gremlin:
+  dev-gremlin:
     image: tinkerpop/gremlin-server:3.7.4
     container_name: dev-gremlin
     ports:
@@ -29,7 +29,7 @@ services:
       timeout: 5s
       retries: 12
 
-  opensearch:
+  dev-opensearch:
     image: opensearchproject/opensearch:2.17.1
     container_name: dev-opensearch
     environment:
@@ -57,11 +57,11 @@ services:
       - AWS_ACCESS_KEY_ID=test
       - AWS_SECRET_ACCESS_KEY=test
       - AWS_DEFAULT_REGION=us-east-1
-      - ENDPOINT_URL=http://localstack:4566
-      - QUEUE_URL=http://localstack:4566/000000000000/ccuc-novedades-prod.fifo
+      - ENDPOINT_URL=http://dev-localstack:4566
+      - QUEUE_URL=http://dev-localstack:4566/000000000000/ccuc-novedades-prod.fifo
       - QUEUE_NAME=ccuc-novedades-prod.fifo
-      - OPENSEARCH_URL=http://opensearch:9200
-      - GREMLIN_HOST=gremlin
+      - OPENSEARCH_URL=http://dev-opensearch:9200
+      - GREMLIN_HOST=dev-gremlin
       - GREMLIN_PORT=8182
     healthcheck:
       test: ["CMD", "python", "-c", "import motor_reglas.core"]
@@ -69,9 +69,9 @@ services:
       timeout: 5s
       retries: 6
     depends_on:
-      localstack:
+      dev-localstack:
         condition: service_healthy
-      opensearch:
+      dev-opensearch:
         condition: service_healthy
-      gremlin:
+      dev-gremlin:
         condition: service_healthy
