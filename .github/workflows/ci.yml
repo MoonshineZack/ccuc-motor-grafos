@@ -1,0 +1,69 @@
+name: CI/CD
+
+on:
+  pull_request:
+    branches: [develop]
+  push:
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Pruebas críticas (bloquean el merge)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+      - name: pytest (idempotencia + tabla de verdad)
+        run: pytest tests/ -v
+
+  synth:
+    name: cdk synth
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Instalar dependencias CDK
+        run: pip install -r infra/requirements.txt
+      - name: cdk synth
+        working-directory: infra
+        run: npx aws-cdk@2 synth
+
+  deploy:
+    name: Deploy Dev/QA
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    needs: [test, synth]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    environment: devqa
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Credenciales AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      - name: Instalar dependencias CDK
+        run: pip install -r infra/requirements.txt
+      - name: cdk deploy
+        working-directory: infra
+        run: npx aws-cdk@2 deploy --require-approval never

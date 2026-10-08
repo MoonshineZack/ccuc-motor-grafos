@@ -1,0 +1,8 @@
+.venv
+cdk.out
+.git
+node_modules
+__pycache__
+.pytest_cache
+*.pyc
+.github
