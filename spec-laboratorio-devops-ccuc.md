@@ -91,8 +91,8 @@ mensaje de novedad → cola SQS FIFO → microservicio (`motor-reglas`) calcula 
 ### 5.1 Repositorio base
 
 **Stack congelado (no cambiar sin aprobación de Producto):**
-- AWS CDK **v2**
-- Python **3.12**
+- AWS CDK **v2 (2.1128.1)**
+- Python **3.12.9**
 
 **Estructura obligatoria de carpetas:**
 
@@ -200,7 +200,7 @@ Dos pruebas son **críticas** y deben existir como mínimo (el equipo dev las im
 Marca cada punto solo cuando se pueda **demostrar**, no cuando "debería funcionar".
 
 ### Repositorio y arquitectura
-- [ ] Proyecto inicializado con **AWS CDK v2** y **Python 3.12**
+- [ ] Proyecto inicializado con **AWS CDK v2 (2.1128.1)** y **Python 3.12.9**
 - [ ] Carpetas `/infra`, `/src`, `/tests` separadas
 - [ ] CDK define VPC, SQS FIFO (dedup por contenido + DLQ), ECS Fargate, Neptune Serverless, OpenSearch y Lambdas de orquestación
 
@@ -254,7 +254,7 @@ Estos puntos **no están definidos** en el requerimiento original. Por favor res
 
 El `README.md` del repositorio debe incluir, como mínimo:
 
-- **Requisitos previos:** Docker + Docker Compose, Python 3.12, (opcional) AWS CLI v2 y `awslocal`.
+- **Requisitos previos:** Docker + Docker Compose, Python 3.12.9, (opcional) AWS CLI v2 y `awslocal`.
 - **Inicio rápido:** clonar, `docker-compose up -d`, verificar contenedores.
 - **Endpoints locales:**
   - AWS emulado: `http://localhost:4566`

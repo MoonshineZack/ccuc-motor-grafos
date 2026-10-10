@@ -9,6 +9,8 @@ from aws_cdk import (
     RemovalPolicy,
     Stack,
     Tags,
+    aws_applicationautoscaling as appscaling,
+    aws_cloudwatch as cloudwatch,
     aws_ec2 as ec2,
     aws_ecs as ecs,
     aws_events as events,
@@ -18,6 +20,7 @@ from aws_cdk import (
     aws_logs as logs,
     aws_neptune as neptune,
     aws_opensearchservice as opensearch,
+    aws_s3 as s3,
     aws_sqs as sqs,
     aws_ssm as ssm,
 )
@@ -132,7 +135,32 @@ class CcucDevQaStack(Stack):
         )
 
         # ------------------------------------------------------------------
-        # ECS Fargate con Spot, mínimo 1 tarea (5.1 + 5.4)
+        # Data Lake S3 y Lambda Egress Orchestrator (Paso 4 de arquitectura)
+        # ------------------------------------------------------------------
+        landing_bucket = s3.Bucket(
+            self,
+            "LandingBucket",
+            bucket_name=f"ccuc-landing-{self.account or 'nutresa'}-{self.region or 'us-east-1'}",
+            removal_policy=RemovalPolicy.DESTROY,
+            auto_delete_objects=True,
+        )
+
+        egress_lambda = _lambda.Function(
+            self,
+            "EgressOrchestrator",
+            function_name="ccuc-egress-orchestrator",
+            runtime=_lambda.Runtime.PYTHON_3_12,
+            handler="lambda_function.lambda_handler",
+            code=_lambda.Code.from_asset(os.path.join(REPO_ROOT, "src", "lambda_egress")),
+            timeout=Duration.seconds(60),
+            environment={
+                "DATALAKE_BUCKET": landing_bucket.bucket_name,
+            },
+        )
+        landing_bucket.grant_write(egress_lambda)
+
+        # ------------------------------------------------------------------
+        # ECS Fargate con Spot, autoescalado min 2 - max 20 tareas (5.1 + 5.4)
         # ------------------------------------------------------------------
         cluster = ecs.Cluster(self, "Cluster", cluster_name="ccuc-devqa", vpc=vpc)
         task_def = ecs.FargateTaskDefinition(
@@ -178,22 +206,65 @@ class CcucDevQaStack(Stack):
                 "OPENSEARCH_ENDPOINT": domain.domain_endpoint,
                 "GREMLIN_HOST": neptune_cluster.attr_endpoint,
                 "GREMLIN_PORT": neptune_cluster.attr_port,
+                "LAMBDA_EGRESS_NAME": egress_lambda.function_name,
             },
         )
         queue.grant_consume_messages(task_def.task_role)
+        egress_lambda.grant_invoke(task_def.task_role)
+
+        # Reglas IAM para Amazon Neptune Serverless (Gremlin API)
+        task_def.task_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=[
+                    "neptune-db:connect",
+                    "neptune-db:ReadDataViaQuery",
+                    "neptune-db:WriteDataViaQuery",
+                    "neptune-db:GetGraphSummary",
+                ],
+                resources=["*"],
+            )
+        )
+
+        # Reglas IAM CloudWatch Metrics para BacklogPerTask
+        task_def.task_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["cloudwatch:PutMetricData"],
+                resources=["*"],
+                conditions={"StringEquals": {"cloudwatch:namespace": "CCUC/MotorReglas"}},
+            )
+        )
+
         service = ecs.FargateService(
             self,
             "MotorReglasService",
             service_name="ccuc-motor-reglas",
             cluster=cluster,
             task_definition=task_def,
-            desired_count=1,
+            desired_count=2,
             capacity_provider_strategies=[
                 ecs.CapacityProviderStrategy(capacity_provider="FARGATE_SPOT", weight=1)
             ],
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS),
             assign_public_ip=False,
             circuit_breaker=ecs.DeploymentCircuitBreaker(enable=True, rollback=True),
+        )
+
+        # Application Auto Scaling: target tracking sobre BacklogPerTask (min 2 - max 20 tareas)
+        scaling = service.auto_scale_task_count(
+            min_capacity=2,
+            max_capacity=20,
+        )
+        scaling.scale_to_track_custom_metric(
+            "BacklogPerTaskTracking",
+            metric=cloudwatch.Metric(
+                namespace="CCUC/MotorReglas",
+                metric_name="BacklogPerTask",
+                statistic="Average",
+                period=Duration.minutes(1),
+            ),
+            target_value=10.0,
+            scale_in_cooldown=Duration.seconds(300),
+            scale_out_cooldown=Duration.seconds(60),
         )
 
         # ------------------------------------------------------------------
@@ -293,6 +364,8 @@ class CcucDevQaStack(Stack):
 
         CfnOutput(self, "ColaNovedadesUrl", value=queue.queue_url)
         CfnOutput(self, "ColaDlqUrl", value=dlq.queue_url)
+        CfnOutput(self, "LandingBucketName", value=landing_bucket.bucket_name)
+        CfnOutput(self, "EgressLambdaArn", value=egress_lambda.function_arn)
         CfnOutput(self, "OpenSearchEndpoint", value=domain.domain_endpoint)
         CfnOutput(self, "NeptuneEndpoint", value=neptune_cluster.attr_endpoint)
         CfnOutput(self, "EcsCluster", value=cluster.cluster_name)

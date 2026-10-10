@@ -63,6 +63,8 @@ services:
       - OPENSEARCH_URL=http://dev-opensearch:9200
       - GREMLIN_HOST=dev-gremlin
       - GREMLIN_PORT=8182
+      - PYTHONPATH=/app
+      - DATALAKE_BUCKET=ccuc-landing
     healthcheck:
       test: ["CMD", "python", "-c", "import motor_reglas.core"]
       interval: 10s
