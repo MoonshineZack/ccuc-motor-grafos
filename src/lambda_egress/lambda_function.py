@@ -39,12 +39,25 @@ def lambda_handler(event, context):
         s3_key = f"triadas-resueltas/{codigo_cu}/{timestamp}_payload.json"
         
         # 3. Escribir en Amazon S3 (Data Lake)
-        s3_client.put_object(
-            Bucket=TARGET_BUCKET,
-            Key=s3_key,
-            Body=json.dumps(payload, indent=2),
-            ContentType='application/json'
-        )
+        try:
+            s3_client.put_object(
+                Bucket=TARGET_BUCKET,
+                Key=s3_key,
+                Body=json.dumps(payload, indent=2),
+                ContentType='application/json'
+            )
+        except Exception as s3_err:
+            if "NoSuchBucket" in str(s3_err):
+                # Auto-recuperación para entorno local / LocalStack
+                s3_client.create_bucket(Bucket=TARGET_BUCKET)
+                s3_client.put_object(
+                    Bucket=TARGET_BUCKET,
+                    Key=s3_key,
+                    Body=json.dumps(payload, indent=2),
+                    ContentType='application/json'
+                )
+            else:
+                raise s3_err
         
         print(f"Triada escrita exitosamente en s3://{TARGET_BUCKET}/{s3_key}")
         

@@ -11,7 +11,7 @@ está corriendo pruebas. Spec completa: [`spec-laboratorio-devops-ccuc.md`](spec
   docker compose version && docker info   # el daemon debe estar encendido
   ```
 - **Puertos libres** en tu máquina: `4566` (LocalStack), `8182` (Gremlin), `9200` (OpenSearch).
-- **Python 3.12** (solo si vas a correr pytest fuera del contenedor o el CDK).
+- **Python 3.12.9** (solo si vas a correr pytest fuera del contenedor o el CDK).
 - (opcional) AWS CLI v2 + [`awslocal`](https://github.com/localstack/awscli-local): `pip install awscli-local`
 - (solo despliegue) Node.js 22+ para el CDK CLI (`npx aws-cdk`)
 
@@ -34,7 +34,7 @@ docker compose up -d
 ```
 
 > **Primera vez:** se descargan ~2 GB de imágenes (LocalStack, OpenSearch, Gremlin,
-> Python 3.12) y se construye la imagen de `dev-motor-reglas`; toma unos minutos.
+> Python 3.12.9) y se construye la imagen de `dev-motor-reglas`; toma unos minutos.
 > Corridas siguientes arrancan en menos de 1 minuto.
 
 ### 3. Verificar que los 4 contenedores estén healthy
@@ -180,7 +180,7 @@ Infraestructura como código en [`infra/`](infra/) — despliegue manual (solo D
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r infra/requirements.txt
-cd infra && npx aws-cdk@2 synth   # valida; npx aws-cdk@2 deploy para desplegar
+cd infra && npx aws-cdk@2.1128.1 synth   # valida; npx aws-cdk@2.1128.1 deploy para desplegar
 ```
 
 ## FinOps: horario y apagado automático
@@ -235,7 +235,7 @@ cd infra && npx aws-cdk@2 synth   # valida; npx aws-cdk@2 deploy para desplegar
 
 > ⚠️ **Riesgo conocido:** destruir/recrear el NAT Gateway fuera de CloudFormation genera
 > *drift* en la VPC; el primer `cdk deploy` posterior puede requerir
-> `npx aws-cdk@2 deploy --force`. Alternativa futura: VPC endpoints (SQS/S3/EC2/SSM)
+> `npx aws-cdk@2.1128.1 deploy --force`. Alternativa futura: VPC endpoints (SQS/S3/EC2/SSM)
 > para eliminar el NAT por completo.
 
 ## Estructura del repositorio

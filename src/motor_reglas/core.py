@@ -1,10 +1,11 @@
-"""Núcleo mínimo del motor de reglas CCUC.
+"""Núcleo del motor de reglas CCUC y lógica de negocio.
 
-El equipo de desarrollo reemplaza estas reglas por la lógica real;
-DevOps garantiza que el entorno las ejecuta y que los tests críticos corren.
+Garantiza idempotencia (hashPayload), tabla de verdad (estado inactivo)
+y coordina los puntos de control del procesamiento.
 """
 import hashlib
 import json
+from typing import Dict, Any, Set, Optional, Callable
 
 
 def hash_payload(payload: dict) -> str:
@@ -14,11 +15,22 @@ def hash_payload(payload: dict) -> str:
 
 
 def can_intersect(estado: str) -> bool:
-    """Tabla de verdad: un cliente Inactivo ("I") nunca genera la arista :INTERSECTA."""
-    return estado != "I"
+    """
+    Tabla de verdad: un cliente Inactivo ("I" o "Inactivo") nunca genera la arista :INTERSECTA.
+    """
+    if not estado:
+        return True
+    estado_str = str(estado).strip().upper()
+    return estado_str not in {"I", "INACTIVO"}
 
 
-def process_novedad(payload: dict, seen: set, *, touch=None, write_edge=None) -> str:
+def process_novedad(
+    payload: dict,
+    seen: set,
+    *,
+    touch: Optional[Callable[[dict], None]] = None,
+    write_edge: Optional[Callable[[dict], None]] = None
+) -> str:
     """Procesa una novedad descartando duplicados ANTES de tocar OpenSearch/Neptune.
 
     touch: representa la consulta a OpenSearch/Neptune.
@@ -29,9 +41,17 @@ def process_novedad(payload: dict, seen: set, *, touch=None, write_edge=None) ->
     if huella in seen:
         return "duplicado"
     seen.add(huella)
+    
     if touch is not None:
         touch(payload)
-    activo = can_intersect(payload.get("estado", ""))
+        
+    # Validar tanto 'estado' como 'estadoCliente'
+    estado = payload.get("estado")
+    if estado is None:
+        estado = payload.get("estadoCliente", "")
+        
+    activo = can_intersect(estado)
     if write_edge is not None and activo:
         write_edge(payload)
+        
     return "nuevo" if activo else "inactivo"

@@ -1,2 +1,4 @@
-boto3
-pytest
+boto3>=1.34.0
+pytest>=8.0.0
+rapidfuzz>=3.8.0
+gremlinpython>=3.7.0
