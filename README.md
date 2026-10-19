@@ -11,7 +11,7 @@ está corriendo pruebas. Spec completa: [`spec-laboratorio-devops-ccuc.md`](spec
   docker compose version && docker info   # el daemon debe estar encendido
   ```
 - **Puertos libres** en tu máquina: `4566` (LocalStack), `8182` (Gremlin), `9200` (OpenSearch).
-- **Python 3.12.9** (solo si vas a correr pytest fuera del contenedor o el CDK).
+- **Python 3.14.5-slim-trixie** (solo si vas a correr pytest fuera del contenedor o el CDK).
 - (opcional) AWS CLI v2 + [`awslocal`](https://github.com/localstack/awscli-local): `pip install awscli-local`
 - (solo despliegue) Node.js 22+ para el CDK CLI (`npx aws-cdk`)
 
@@ -34,7 +34,7 @@ docker compose up -d
 ```
 
 > **Primera vez:** se descargan ~2 GB de imágenes (LocalStack, OpenSearch, Gremlin,
-> Python 3.12.9) y se construye la imagen de `dev-motor-reglas`; toma unos minutos.
+> Python 3.14.5-slim-trixie) y se construye la imagen de `dev-motor-reglas`; toma unos minutos.
 > Corridas siguientes arrancan en menos de 1 minuto.
 
 ### 3. Verificar que los 4 contenedores estén healthy
