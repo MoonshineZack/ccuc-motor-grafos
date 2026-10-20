@@ -21,6 +21,14 @@ from motor_reglas.neptune_client import NeptuneGremlinClient
 logger = logging.getLogger("ccuc.orchestrator")
 
 
+class TriadaEgressError(RuntimeError):
+    """La tríada no pudo persistirse en el Data Lake vía la Lambda Egress.
+
+    Se propaga para que el consumidor SQS **no** elimine el mensaje y pueda
+    reintentarse (o terminar en la DLQ) en lugar de perder la novedad.
+    """
+
+
 class CCUCOrchestrator:
     """Motor de orquestación y reglas ejecutado en ECS Fargate."""
 
@@ -67,6 +75,17 @@ class CCUCOrchestrator:
                 return {"status": "duplicado", "hash": huella}
             seen_cache.add(huella)
 
+        try:
+            return self._procesar_novedad(payload, huella)
+        except Exception:
+            # La novedad no quedó confirmada: se libera la huella para que el
+            # reintento de SQS no se descarte como duplicado.
+            if seen_cache is not None:
+                seen_cache.discard(huella)
+            raise
+
+    def _procesar_novedad(self, payload: Dict[str, Any], huella: str) -> Dict[str, Any]:
+        """Pipeline de 4 pasos para una novedad ya validada como no duplicada."""
         logger.info(f"[Paso 1] Mensaje válido recibido (hash: {huella[:8]}).")
 
         # =====================================================================
@@ -173,25 +192,84 @@ class CCUCOrchestrator:
             "egress_status": egress_resp.get("status"),
         }
 
+    @staticmethod
+    def _leer_respuesta_lambda(resp: Dict[str, Any]) -> Dict[str, Any]:
+        """Valida la respuesta de ``lambda.invoke`` y extrae el cuerpo del handler.
+
+        ``Invoke`` devuelve HTTP 200 aunque el handler haya fallado; por eso es
+        imprescindible revisar ``FunctionError`` y el ``statusCode`` del payload.
+        """
+        if resp.get("FunctionError"):
+            raise TriadaEgressError(f"La Lambda Egress reportó FunctionError: {resp['FunctionError']}")
+
+        status_code = resp.get("StatusCode")
+        if status_code not in (200, 202):
+            raise TriadaEgressError(f"Lambda Egress devolvió StatusCode {status_code}")
+
+        payload = resp.get("Payload")
+        if payload is None:
+            return {}
+
+        raw = payload.read() if hasattr(payload, "read") else payload
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8")
+        if not raw:
+            return {}
+
+        try:
+            body = json.loads(raw) if isinstance(raw, str) else raw
+        except (TypeError, ValueError) as exc:
+            raise TriadaEgressError(f"Respuesta inválida de Lambda Egress: {raw!r}") from exc
+
+        if isinstance(body, dict):
+            handler_status = int(body.get("statusCode", 200) or 200)
+            if handler_status >= 400:
+                detalle = body.get("body") or body.get("error") or body
+                raise TriadaEgressError(f"Lambda Egress falló ({handler_status}): {detalle}")
+        return body if isinstance(body, dict) else {"raw": body}
+
     def _enviar_a_lambda_egress(self, payload_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """Invoca la Lambda Egress Orchestrator para persistir en S3 Data Lake."""
-        # 1. Intento por boto3 Lambda
+        """Invoca la Lambda Egress Orchestrator (Paso 4) para persistir en S3.
+
+        Si la invocación remota falla se intenta el handler directo como
+        *fallback* local. Si ambos fallan se lanza ``TriadaEgressError`` para
+        que el mensaje SQS **no** se elimine y pueda reintentarse / ir a la DLQ.
+        """
+        error_remoto: Optional[Exception] = None
+
+        # 1. Invocación real de la Lambda (evento del envío de la tríada).
         if self.lambda_client:
             try:
                 resp = self.lambda_client.invoke(
                     FunctionName=self.lambda_egress_name,
                     InvocationType="RequestResponse",
-                    Payload=json.dumps(payload_dict)
+                    Payload=json.dumps(payload_dict),
                 )
-                return {"status": "invocado_lambda", "statusCode": resp.get("StatusCode")}
-            except Exception as e:
-                logger.warning(f"Error invocando Lambda vía boto3: {e}. Probando fallback local.")
+                body = self._leer_respuesta_lambda(resp)
+                return {
+                    "status": "invocado_lambda",
+                    "statusCode": resp.get("StatusCode"),
+                    "lambda_statusCode": body.get("statusCode"),
+                }
+            except Exception as exc:  # noqa: BLE001 - se reintenta con fallback
+                error_remoto = exc
+                logger.warning(
+                    "Error invocando Lambda %s: %s. Probando fallback directo.",
+                    self.lambda_egress_name,
+                    exc,
+                )
 
-        # 2. Fallback de invocación directa del módulo src/lambda_egress
+        # 2. Fallback de invocación directa del módulo src/lambda_egress.
         try:
             from lambda_egress.lambda_function import lambda_handler
+
             resultado = lambda_handler(payload_dict, None)
-            return {"status": "invocado_directo", "resultado": resultado}
-        except Exception as ex:
-            logger.error(f"Fallback de lambda_egress falló: {ex}")
-            return {"status": "error_egress", "error": str(ex)}
+            status = int(resultado.get("statusCode", 500) or 500)
+            if status >= 400:
+                raise TriadaEgressError(f"El handler de egress devolvió {status}: {resultado}")
+            return {"status": "invocado_directo", "statusCode": status, "resultado": resultado}
+        except Exception as exc:  # noqa: BLE001 - se reporta como fallo definitivo
+            logger.error("Fallback de lambda_egress falló: %s", exc)
+            raise TriadaEgressError(
+                f"No se pudo persistir la tríada en el Data Lake: {exc}"
+            ) from (error_remoto or exc)

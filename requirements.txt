@@ -1,4 +1,6 @@
 boto3>=1.34.0
 pytest>=8.0.0
 rapidfuzz>=3.8.0
-gremlinpython>=3.7.0
+# Debe coincidir con la versión del Gremlin Server 3.7.4 del laboratorio:
+# gremlinpython 3.8.x envía el paso discard(), que el servidor 3.7 no soporta.
+gremlinpython>=3.7.0,<3.8.0

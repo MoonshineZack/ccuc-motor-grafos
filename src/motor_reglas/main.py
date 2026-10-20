@@ -92,7 +92,11 @@ def main():
                     resultado = orchestrator.procesar_novedad(payload, seen_cache=seen)
                     logger.info(f"Resultado procesamiento msg {msg_id}: {resultado}")
 
-                    # Eliminar de la cola una vez procesado exitosamente
+                    # Solo se confirma (delete) si la tríada quedó persistida en
+                    # el Data Lake. Un error de egress deja el mensaje en la cola.
+                    if resultado.get("status") not in {"procesado", "duplicado"}:
+                        raise RuntimeError(f"Procesamiento no confirmado: {resultado}")
+
                     sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
                     logger.info(f"Mensaje {msg_id} eliminado exitosamente de SQS FIFO.")
 

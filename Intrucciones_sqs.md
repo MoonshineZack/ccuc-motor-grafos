@@ -14,22 +14,44 @@ python scripts/simulate_sqs_messages.py
 ```
 
 ## 2. Simulación de Salida (Motor de Reglas -> Lambda -> S3 Data Lake)
-He creado el handler de la AWS Lambda en `src/lambda_egress/lambda_function.py`.
+El handler de la AWS Lambda está en `src/lambda_egress/lambda_function.py` y se
+despliega automáticamente en LocalStack como `ccuc-egress-orchestrator`.
 
-Según la arquitectura, el **Egress Orchestrator** recibe el `Payload Triada` y se encarga de escribir la *triada resuelta* (< 10 min) hacia el bucket S3 (Zona de salida - Data Lake).
+Según la arquitectura, el **Egress Orchestrator** recibe el `Payload Triada` en el
+**Paso 4** y se encarga de escribir la *triada resuelta* (< 10 min) hacia el bucket
+S3 (Zona de salida - Data Lake).
 
-### Características de la Lambda simulada:
-- Se conecta a LocalStack (`http://localhost:4566`).
-- Obtiene el payload resultante (simulado).
+### Características de la Lambda:
+- En local se conecta a LocalStack (`ENDPOINT_URL=http://dev-localstack:4566`);
+  en AWS usa el rol IAM y el endpoint real de S3.
+- Recibe el evento de envío de la tríada desde el Motor de Reglas (ECS) y también
+  soporta eventos de API Gateway, EventBridge y SQS.
 - Genera un archivo `.json` particionado por el `codigoCu` y un `timestamp`.
-- Lo almacena en el bucket S3 (que, para fines de este ejercicio, llamamos `ccuc-landing`).
+- Lo almacena en el bucket S3 (para este ejercicio, `ccuc-landing`).
+- Si la escritura falla devuelve `statusCode 500`; el Motor de Reglas entonces
+  **no** elimina el mensaje de SQS para que se reintente o caiga a la DLQ.
 
 ### ¿Cómo probar la Lambda localmente?
-No necesitas invocarla mediante HTTP o subcontratar un framework serverless por ahora. El propio archivo tiene una sección `__main__` con un test unitario incorporado que le envía un "Payload Triada" falso y lo escribe en el S3 de LocalStack.
 
-En tu terminal ejecuta:
+**Opción A (recomendada): flujo real por SQS y ECS.** Levanta el laboratorio,
+arranca el consumidor y envía una novedad como se describe en
+`ARQUITECTURA_Y_EJECUCION_ECS_FARGATE.md`. El Paso 4 invocará la Lambda real de
+LocalStack y esta escribirá en S3.
+
+**Opción B: invocación directa del handler** (con LocalStack encendido; el bloque
+`__main__` apunta a `http://localhost:4566`):
+
 ```bash
 python src/lambda_egress/lambda_function.py
+```
+
+**Opción C: invocar la Lambda desplegada en LocalStack** con el evento de la tríada:
+
+```bash
+docker exec -it dev-localstack awslocal lambda invoke \
+  --function-name ccuc-egress-orchestrator \
+  --payload '{"codigoCu":"CU-1001","codigoPvu":"PVU-1","golden_record_id":"GR-1","matches_found":true,"score_calidad":98.5,"datos_consolidados":{"nombre":"Juan Perez"}}' \
+  /tmp/egress-response.json
 ```
 
 > **Verificar en LocalStack:** Si tienes instalado el CLI local de AWS (`awslocal`), puedes validar que el archivo quedó en S3 usando:

@@ -1,2 +1,4 @@
-aws-cdk-lib==2.1128.1
+# aws-cdk-lib usa su propio versionado (2.x); 2.1128.1 es la versión del CLI.
+# La versión de la librería debe existir en PyPI (2.1128.1 no existe).
+aws-cdk-lib==2.273.0
 constructs>=10.0.0,<11.0.0

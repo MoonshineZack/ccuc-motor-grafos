@@ -6,10 +6,15 @@ services:
     ports:
       - "4566:4566"
     environment:
-      - SERVICES=sqs,s3,events
+      - SERVICES=sqs,s3,events,lambda
       - DEFAULT_REGION=us-east-1
+      - LAMBDA_DOCKER_NETWORK=ccuc-lab-net
+      - LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=120
     volumes:
       - ./scripts/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh:ro
+      - ./src/lambda_egress:/opt/lambda_egress:ro
+      # Necesario para que LocalStack ejecute las Lambdas como contenedores.
+      - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
@@ -77,3 +82,9 @@ services:
         condition: service_healthy
       dev-gremlin:
         condition: service_healthy
+
+networks:
+  # Nombre fijo para que los contenedores de Lambda de LocalStack puedan
+  # resolver dev-localstack y escribir en el S3 emulado.
+  default:
+    name: ccuc-lab-net

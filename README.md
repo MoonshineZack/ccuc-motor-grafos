@@ -11,7 +11,7 @@ está corriendo pruebas. Spec completa: [`spec-laboratorio-devops-ccuc.md`](spec
   docker compose version && docker info   # el daemon debe estar encendido
   ```
 - **Puertos libres** en tu máquina: `4566` (LocalStack), `8182` (Gremlin), `9200` (OpenSearch).
-- **Python 3.14.5-slim-trixie** (solo si vas a correr pytest fuera del contenedor o el CDK).
+- **Python 3.14** (imagen `python:3.14.5-slim-trixie`; solo si vas a correr pytest fuera del contenedor o el CDK).
 - (opcional) AWS CLI v2 + [`awslocal`](https://github.com/localstack/awscli-local): `pip install awscli-local`
 - (solo despliegue) Node.js 22+ para el CDK CLI (`npx aws-cdk`)
 
@@ -47,10 +47,14 @@ Salida esperada (los 4 en `(healthy)`):
 
 | Contenedor | Servicio | Puerto |
 |---|---|---|
-| `dev-localstack` | LocalStack: SQS, S3, EventBridge | 4566 |
+| `dev-localstack` | LocalStack: SQS, S3, EventBridge y Lambda | 4566 |
 | `dev-gremlin` | Gremlin Server (simula Neptune) | 8182 |
 | `dev-opensearch` | OpenSearch single-node, sin seguridad | 9200 |
 | `dev-motor-reglas` | Microservicio con hot-reloading | — |
+
+> LocalStack usa el socket de Docker para ejecutar la Lambda Egress
+> (`ccuc-egress-orchestrator`) como contenedor. Es la misma Lambda que el
+> Motor de Reglas invoca en el **Paso 4** con el evento de envío de la tríada.
 
 Si alguno queda `(unhealthy)` o `Exited`: revisa sus logs con
 `docker compose logs <nombre-del-contenedor>`.
@@ -62,11 +66,14 @@ Si alguno queda `(unhealthy)` o `Exited`: revisa sus logs con
 docker compose exec dev-localstack awslocal sqs list-queues
 # Buckets S3
 docker compose exec dev-localstack awslocal s3api list-buckets --query 'Buckets[].Name' --output text
+# Lambda Egress (Paso 4)
+docker compose exec dev-localstack awslocal lambda list-functions --query 'Functions[].FunctionName' --output text
 ```
 
 Debe aparecer exactamente:
 - Colas: `ccuc-novedades-prod.fifo` y `ccuc-novedades-dlq.fifo`
 - Buckets: `ccuc-landing` y `ccuc-staging`
+- Lambda: `ccuc-egress-orchestrator`
 
 Comprobación extra de la cola principal (deduplicación + DLQ):
 
@@ -136,6 +143,19 @@ docker compose down      # borra los contenedores; nada se pierde: al volver a
      --message-group-id g1
    ```
 
+### Paso 4: disparo de la Lambda Egress
+
+El consumidor ECS **no** compite con la Lambda por la cola: es el único que hace
+long polling. Al terminar el Paso 3, invoca `ccuc-egress-orchestrator` con el
+`Payload Tríada` como evento (`InvocationType=RequestResponse`). En local esa
+invocación va a la Lambda real desplegada en LocalStack y esta escribe en
+`s3://ccuc-landing/triadas-resueltas/{codigoCu}/{timestamp}_payload.json`.
+
+El handler acepta evento directo, `body` de API Gateway, `detail` de EventBridge
+y `Records` de SQS. Si el servicio Lambda no está disponible en local, el motor
+usa un *fallback* de invocación directa del módulo. Si ambas rutas fallan, el
+mensaje **no** se elimina de SQS y se reintenta / cae a la DLQ.
+
 ## Pruebas (obligatorias antes de push)
 
 ```bash
@@ -149,6 +169,8 @@ Dos pruebas son **críticas** y el pipeline las convierte en bloqueo de merge:
 |---|---|---|
 | Idempotencia | `tests/test_idempotency.py` | Los duplicados se descartan por `hashPayload` **antes** de tocar OpenSearch/Neptune (100%). |
 | Tabla de verdad | `tests/test_truth_table.py` | Cliente en estado Inactivo ("I") → **NO** se crea la arista `:INTERSECTA`. |
+| Lambda Egress | `tests/test_lambda_egress.py` | La Lambda se activa con el evento de envío (directo, API GW o SQS) y escribe la tríada en S3. |
+| Orquestador | `tests/test_orchestrator.py` | El Paso 4 invoca la Lambda con la tríada y **no** confirma el mensaje SQS si el egress falla. |
 
 > El equipo de desarrollo implementa la lógica real dentro de `src/motor_reglas/core.py`;
 > la infraestructura para ejecutarlas ya está lista.
@@ -165,6 +187,8 @@ Dos pruebas son **críticas** y el pipeline las convierte en bloqueo de merge:
 | Mensaje "no aparece" en la cola | Deduplicación de contenido (ventana de 5 min) | Cambia el cuerpo del mensaje (distinto `nonce`); es el comportamiento esperado |
 | `pytest: command not found` fuera del contenedor | Dependencias no instaladas | `pip install -r requirements.txt` (o corre los tests dentro del contenedor como está arriba) |
 | Primer `docker compose up` muy lento | Descarga de ~2 GB de imágenes | Espera; solo pasa la primera vez |
+| La Lambda Egress no se ejecuta en local | LocalStack sin `lambda` o sin socket Docker | Verifica `docker compose exec dev-localstack awslocal lambda list-functions`; revisa `docker compose logs dev-localstack` |
+| Error de Gremlin `Could not locate method: DefaultGraphTraversal.discard()` | `gremlinpython` 3.8 contra Gremlin Server 3.7 | Usa `gremlinpython>=3.7.0,<3.8.0` (ya fijado en `requirements.txt`) y reconstruye la imagen |
 
 ## Despliegue (CI/CD)
 
@@ -216,6 +240,12 @@ cd infra && npx aws-cdk@2.1128.1 synth   # valida; npx aws-cdk@2.1128.1 deploy p
 - **Deduplicación SQS**: la nativa de la cola solo cubre una ventana de **5 minutos**.
   La idempotencia real con `hashPayload` en la aplicación es obligatoria
   (`src/motor_reglas/core.py`).
+- **Lambda Egress**: en local se ejecuta dentro de LocalStack (requiere el socket
+  de Docker y el servicio `lambda` habilitado). En AWS usa el rol IAM de la
+  función y el endpoint real de S3; el código no hardcodea credenciales ni
+  `localhost`. El Motor de Reglas invoca la Lambda en el **Paso 4** con el
+  `Payload Tríada`; no hay un *event source mapping* de SQS para evitar
+  consumidores competidores con ECS.
 
 ## Preguntas abiertas (propuestas de la estimación — se confirman con Producto)
 
@@ -247,7 +277,8 @@ ccuc-motor-grafos/
 │   └── lambdas/              # ciclo de vida (FinOps) + orquestador
 ├── src/                      # Microservicios
 │   ├── motor_reglas/         # consumidor SQS + core de reglas
-│   └── motor_calidad/
+│   ├── motor_calidad/
+│   └── lambda_egress/        # Lambda Egress Orchestrator (Paso 4)
 ├── tests/                    # Pruebas (pytest) — bloquean merge
 ├── scripts/
 │   └── init-aws.sh           # Bootstrap de LocalStack
