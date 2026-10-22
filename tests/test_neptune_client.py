@@ -5,7 +5,7 @@ from motor_reglas.neptune_client import NeptuneGremlinClient
 
 def test_neptune_upsert_cliente_y_pvu():
     client = NeptuneGremlinClient(use_mock_fallback=True)
-    
+
     # 1. Upsert Cliente
     cu_id = client.upsert_cliente(
         codigo_cu="CU-1018273645",
@@ -36,7 +36,7 @@ def test_neptune_upsert_cliente_y_pvu():
 
 def test_neptune_regla_intersecta_activo_vs_inactivo():
     client = NeptuneGremlinClient(use_mock_fallback=True)
-    
+
     # Si activo=False, regla de negocio impide crear arista :INTERSECTA
     creada_inactivo = client.crear_relacion_intersecta("CU-001", "CU-002", activo=False)
     assert creada_inactivo is False

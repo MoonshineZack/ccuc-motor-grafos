@@ -10,8 +10,9 @@ import datetime
 import json
 import logging
 import os
-import boto3
 from typing import Dict, Any, Optional
+
+import boto3
 
 from motor_calidad.fuzzy_engine import MotorCalidadCUPVU
 from motor_calidad.models import ResultadoCalidad, PayloadTriada
@@ -137,7 +138,7 @@ class CCUCOrchestrator:
         # 3.4 Regla de Intersección (:INTERSECTA)
         # Tabla de verdad: estado "I" (Inactivo) NO crea arista :INTERSECTA
         es_activo = can_intersect(payload.get("estado", "")) and can_intersect(payload.get("estadoCliente", ""))
-        
+
         arista_creada = False
         if resultado_calidad.candidato_asociado_id and es_activo:
             arista_creada = self.neptune.crear_relacion_intersecta(

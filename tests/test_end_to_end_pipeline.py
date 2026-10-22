@@ -85,7 +85,7 @@ def test_pipeline_completo_con_novedades_dummy():
 
     # Verificar Tríadas generadas
     assert len(triadas_recibidas) == 3
-    
+
     # Validar Tríada 1 (Persona Natural)
     t1 = triadas_recibidas[0]
     assert t1["codigoCu"] == "CU-1018273645"

@@ -131,11 +131,11 @@ def main():
 
     for data in dummy_messages:
         msg_body = json.dumps(data)
-        
-        # Obtenemos el documento para usarlo como MessageGroupId. 
+
+        # Obtenemos el documento para usarlo como MessageGroupId.
         # Si viene nulo (caso de error), asignamos un ID por defecto para que SQS no falle.
         group_id = str(data.get('documento') or 'SIN_DOCUMENTO')
-        
+
         # 3. Enviar el mensaje a la cola FIFO
         response = sqs.send_message(
             QueueUrl=queue_url,
@@ -143,7 +143,7 @@ def main():
             MessageGroupId=group_id,
             MessageDeduplicationId=str(uuid.uuid4())
         )
-        
+
         print(f"[*] Mensaje enviado exitosamente - documento: {group_id} | MessageId: {response.get('MessageId')}")
         time.sleep(1)
 

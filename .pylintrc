@@ -1,0 +1,28 @@
+[MAIN]
+# Runtime de la Lambda y de la imagen de ECS.
+py-version = 3.12
+jobs = 0
+ignore = .venv,cdk.out,node_modules,__pycache__,.pytest_cache
+ignore-patterns = ^cdk\.out$
+
+[FORMAT]
+max-line-length = 120
+
+[MESSAGES CONTROL]
+# Se desactivan solo reglas de estilo que no aportan valor en este proyecto.
+# Los errores reales (imports inexistentes, variables no usadas, etc.) siguen activos.
+disable =
+    broad-exception-caught,
+    duplicate-code,
+    import-outside-toplevel,
+    logging-fstring-interpolation,
+    missing-class-docstring,
+    missing-function-docstring,
+    too-few-public-methods,
+    too-many-branches,
+    too-many-instance-attributes,
+    too-many-locals,
+    too-many-statements
+
+[BASIC]
+good-names = i,j,k,ex,id,db,fn,s3,cu

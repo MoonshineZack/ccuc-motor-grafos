@@ -42,10 +42,10 @@ def main():
     try:
         with open(csv_file_path, mode='r', encoding='utf-8') as csv_file:
             csv_reader = csv.DictReader(csv_file)
-            
+
             for row in csv_reader:
                 data = {k.strip(): v.strip() for k, v in row.items() if k is not None}
-                
+
                 # Mapeo de la estructura CSV a la estructura JSON esperada
                 # Se asume que nombres compuestos vienen en 'agentname' y se envían a primerNombre por simplicidad
                 payload = {
@@ -71,13 +71,13 @@ def main():
                     "peticionDeBorradoIndividual": "No",
                     "situacionCliente": "Creado"
                 }
-                
+
                 msg_body = json.dumps(payload)
-                
+
                 # Usamos el documento para el MessageGroupId
                 doc = payload.get('documento')
                 group_id = str(doc) if doc else 'SIN_DOCUMENTO'
-                
+
                 # 3. Enviar el mensaje a la cola FIFO
                 response = sqs.send_message(
                     QueueUrl=queue_url,
@@ -85,10 +85,10 @@ def main():
                     MessageGroupId=group_id,
                     MessageDeduplicationId=str(uuid.uuid4())
                 )
-                
+
                 print(f"[*] Mensaje enviado exitosamente - documento: {group_id} | MessageId: {response.get('MessageId')}")
-                
-                time.sleep(0.1) 
+
+                time.sleep(0.1)
 
     except FileNotFoundError:
         print(f"Error: No se encontró el archivo '{csv_file_path}'. Verifica que la ruta y el nombre sean correctos.")

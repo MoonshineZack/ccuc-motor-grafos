@@ -174,7 +174,7 @@ class MotorCalidadCUPVU:
             # Si no hay documento en alguno de los dos, se compara nombre y dirección con RapidFuzz
             cand_nom = cand.get("nombreCompleto") or cand.get("nombre_completo", "")
             cand_dir = cand.get("direccionNormalizada") or cand.get("direccion_normalizada", "")
-            
+
             sim_nom = fuzz.token_set_ratio(nombre_completo, cand_nom) if cand_nom else 0.0
             sim_dir = fuzz.token_set_ratio(dir_norm, cand_dir) if cand_dir else 0.0
             score_compuesto = (sim_nom * 0.6) + (sim_dir * 0.4)

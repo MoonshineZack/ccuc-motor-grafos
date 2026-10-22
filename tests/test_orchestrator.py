@@ -50,7 +50,7 @@ def test_orquestador_flujo_completo_4_pasos():
     mock_lambda = MockLambdaClient()
     neptune_client = NeptuneGremlinClient(use_mock_fallback=True)
     calidad_engine = MotorCalidadCUPVU()
-    
+
     orchestrator = CCUCOrchestrator(
         neptune_client=neptune_client,
         calidad_engine=calidad_engine,
@@ -129,11 +129,10 @@ def test_lambda_egress_fallida_propaga_error_y_no_confirma(monkeypatch):
     """Si la Lambda del Paso 4 falla, la novedad NO debe darse por procesada."""
     import lambda_egress.lambda_function as egress
 
-    monkeypatch.setattr(
-        egress,
-        "lambda_handler",
-        lambda event, context: {"statusCode": 500, "body": json.dumps({"error": "S3 caído"})},
-    )
+    def handler_que_falla(event, context):
+        raise RuntimeError("S3 caído")
+
+    monkeypatch.setattr(egress, "lambda_handler", handler_que_falla)
 
     orchestrator = CCUCOrchestrator(
         neptune_client=NeptuneGremlinClient(use_mock_fallback=True),
@@ -143,6 +142,18 @@ def test_lambda_egress_fallida_propaga_error_y_no_confirma(monkeypatch):
 
     with pytest.raises(TriadaEgressError):
         orchestrator.procesar_novedad(NOVEDAD, seen_cache=set())
+
+
+def test_respuesta_lambda_con_function_error_se_rechaza():
+    """Lambda reporta los fallos del handler con FunctionError, no con HTTP 500."""
+    respuesta = {
+        "StatusCode": 200,
+        "FunctionError": "Unhandled",
+        "Payload": io.BytesIO(b'{"errorMessage": "S3 caido"}'),
+    }
+
+    with pytest.raises(TriadaEgressError, match="FunctionError"):
+        CCUCOrchestrator._leer_respuesta_lambda(respuesta)
 
 
 def test_fallo_de_egress_libera_hash_para_reintento():

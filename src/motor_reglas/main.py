@@ -10,7 +10,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from motor_reglas.core import hash_payload, process_novedad  # noqa: E402
+# pylint: disable=wrong-import-position
 from motor_reglas.orchestrator import CCUCOrchestrator  # noqa: E402
 
 logging.basicConfig(
@@ -20,12 +20,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ccuc.main")
 
-running = True
+running = True  # pylint: disable=invalid-name
 
 
-def handle_shutdown(signum, frame):
+def handle_shutdown(signum, _frame):
     """Manejo de señales del SO (SIGTERM/SIGINT) para apagado graceful en ECS Fargate."""
-    global running
+    global running  # pylint: disable=global-statement
     logger.info(f"Señal de apagado recibida ({signum}). Finalizando tareas en curso...")
     running = False
 
@@ -37,7 +37,7 @@ signal.signal(signal.SIGTERM, handle_shutdown)
 def main():
     endpoint = os.environ.get("ENDPOINT_URL") or None
     region = os.environ.get("AWS_DEFAULT_REGION", "us-east-1")
-    
+
     sqs = boto3.client("sqs", endpoint_url=endpoint, region_name=region)
 
     queue_url = os.environ.get("QUEUE_URL")
@@ -50,7 +50,7 @@ def main():
             return
 
     logger.info(f"Iniciando consumidor ECS Fargate sobre cola: {queue_url}")
-    
+
     # Inicializar orquestador central
     orchestrator = CCUCOrchestrator()
 
@@ -80,7 +80,7 @@ def main():
             for msg in messages:
                 receipt_handle = msg["ReceiptHandle"]
                 msg_id = msg.get("MessageId", "N/A")
-                
+
                 try:
                     payload = json.loads(msg["Body"])
                 except json.JSONDecodeError as err:

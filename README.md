@@ -149,19 +149,31 @@ El consumidor ECS **no** compite con la Lambda por la cola: es el único que hac
 long polling. Al terminar el Paso 3, invoca `ccuc-egress-orchestrator` con el
 `Payload Tríada` como evento (`InvocationType=RequestResponse`). En local esa
 invocación va a la Lambda real desplegada en LocalStack y esta escribe en
-`s3://ccuc-landing/triadas-resueltas/{codigoCu}/{timestamp}_payload.json`.
+`s3://ccuc-landing/triadas-resueltas/{codigoCu}/{sha256(payload)}_payload.json`.
+La clave es determinística: si el mismo payload se reintenta, se sobrescribe el
+mismo objeto en lugar de duplicarlo.
 
 El handler acepta evento directo, `body` de API Gateway, `detail` de EventBridge
 y `Records` de SQS. Si el servicio Lambda no está disponible en local, el motor
 usa un *fallback* de invocación directa del módulo. Si ambas rutas fallan, el
-mensaje **no** se elimina de SQS y se reintenta / cae a la DLQ.
+mensaje **no** se elimina de SQS y se reintenta / cae a la DLQ. Los errores del
+handler se relanzan para que Lambda reporte `FunctionError` (no se devuelve un
+`statusCode 500` en el body).
 
-## Pruebas (obligatorias antes de push)
+## Pruebas y análisis estático (obligatorios antes de push)
 
 ```bash
+# Dentro del contenedor de desarrollo
 docker exec -it dev-motor-reglas bash
 cd /app && pytest ../tests/ -v
+
+# Fuera del contenedor (requiere pip install -r requirements.txt)
+python -m pytest tests/ -v
+python -m pylint src infra/app.py
 ```
+
+La configuración de `pylint` está en [`.pylintrc`](.pylintrc) y el pipeline la
+ejecuta como paso bloqueante (`Análisis estático (pylint)`).
 
 Dos pruebas son **críticas** y el pipeline las convierte en bloqueo de merge:
 
@@ -192,12 +204,12 @@ Dos pruebas son **críticas** y el pipeline las convierte en bloqueo de merge:
 
 ## Despliegue (CI/CD)
 
-- **Merge a `develop`** → pipeline ejecuta `pytest` + `cdk synth` y despliega a AWS Dev/QA.
+- **Merge a `develop`** → pipeline ejecuta `pytest` + `pylint` + `cdk synth` y despliega a AWS Dev/QA.
   Los desarrolladores **no** despliegan a mano.
 - Configuración única en GitHub:
   1. Secrets del job `deploy`: `AWS_ROLE_ARN` (rol OIDC) y `AWS_REGION`.
-  2. Branch protection en `develop`: requerir los checks `Pruebas críticas` y `cdk synth`
-     (esto es lo que **bloquea el merge** si una prueba falla).
+  2. Branch protection en `develop`: requerir los checks `Análisis estático (pylint)`,
+     `Pruebas críticas` y `cdk synth` (esto es lo que **bloquea el merge** si algo falla).
 
 Infraestructura como código en [`infra/`](infra/) — despliegue manual (solo DevOps):
 
@@ -280,6 +292,7 @@ ccuc-motor-grafos/
 │   ├── motor_calidad/
 │   └── lambda_egress/        # Lambda Egress Orchestrator (Paso 4)
 ├── tests/                    # Pruebas (pytest) — bloquean merge
+├── .pylintrc                 # Reglas de análisis estático (pylint)
 ├── scripts/
 │   └── init-aws.sh           # Bootstrap de LocalStack
 ├── docker-compose.yml

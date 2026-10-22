@@ -3,6 +3,7 @@
 Validan que la función se active con el evento de envío de la tríada en sus
 distintos formatos y que persista el objeto en el Data Lake (S3).
 """
+import hashlib
 import json
 
 import pytest
@@ -80,11 +81,10 @@ def test_evento_api_gateway_body_string(fake_s3):
     _assert_guardado(fake_s3)
 
 
-def test_sin_codigocu_devuelve_500(fake_s3):
-    resp = egress.lambda_handler({"datos_consolidados": {}}, None)
+def test_sin_codigocu_propaga_error(fake_s3):
+    with pytest.raises(ValueError, match="codigoCu"):
+        egress.lambda_handler({"datos_consolidados": {}}, None)
 
-    assert resp["statusCode"] == 500
-    assert "codigoCu" in json.loads(resp["body"])["error"]
     assert fake_s3.objects == {}
 
 
@@ -110,3 +110,32 @@ def test_s3_no_such_bucket_se_autorecupera_en_local(fake_s3, monkeypatch):
 
     assert resp["statusCode"] == 200
     assert "ccuc-landing" in fake_s3.buckets
+
+
+def _esperar_hash(payload):
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def test_clave_s3_es_deterministica_por_hash(fake_s3):
+    egress.lambda_handler(TRIADA, None)
+
+    key = next(iter(fake_s3.objects))[1]
+    assert key == f"triadas-resueltas/CU-1001/{_esperar_hash(TRIADA)}_payload.json"
+
+
+def test_reintento_con_mismo_payload_no_duplica_objeto(fake_s3):
+    egress.lambda_handler(TRIADA, None)
+    egress.lambda_handler(TRIADA, None)
+
+    assert len(fake_s3.objects) == 1
+
+
+def test_payloads_distintos_generan_claves_distintas(fake_s3):
+    otra_triada = {**TRIADA, "score_calidad": 55.0}
+
+    egress.lambda_handler(TRIADA, None)
+    egress.lambda_handler(otra_triada, None)
+
+    assert len(fake_s3.objects) == 2
+    assert len({key for _, key in fake_s3.objects}) == 2

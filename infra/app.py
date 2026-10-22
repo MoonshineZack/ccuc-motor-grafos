@@ -9,7 +9,6 @@ from aws_cdk import (
     RemovalPolicy,
     Stack,
     Tags,
-    aws_applicationautoscaling as appscaling,
     aws_cloudwatch as cloudwatch,
     aws_ec2 as ec2,
     aws_ecs as ecs,
@@ -145,16 +144,27 @@ class CcucDevQaStack(Stack):
             auto_delete_objects=True,
         )
 
+        egress_logs = logs.LogGroup(
+            self,
+            "EgressOrchestratorLogs",
+            log_group_name="/aws/lambda/ccuc-egress-orchestrator",
+            retention=logs.RetentionDays.ONE_WEEK,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
         egress_lambda = _lambda.Function(
             self,
             "EgressOrchestrator",
             function_name="ccuc-egress-orchestrator",
+            description="Paso 4: persiste el Payload Tríada en el Data Lake (S3).",
             runtime=_lambda.Runtime.PYTHON_3_12,
             handler="lambda_function.lambda_handler",
             code=_lambda.Code.from_asset(os.path.join(REPO_ROOT, "src", "lambda_egress")),
             timeout=Duration.seconds(60),
+            memory_size=256,
+            log_group=egress_logs,
             environment={
                 "DATALAKE_BUCKET": landing_bucket.bucket_name,
+                "LOG_LEVEL": "INFO",
             },
         )
         landing_bucket.grant_write(egress_lambda)

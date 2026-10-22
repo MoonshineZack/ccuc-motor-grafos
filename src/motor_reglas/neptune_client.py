@@ -40,7 +40,7 @@ class NeptuneGremlinClient:
         self.g = None
         self.connection = None
         self.is_connected = False
-        
+
         # Almacenamiento en memoria para modo offline / pruebas unitarias
         self._mock_vertices: Dict[str, Dict[str, Any]] = {}
         self._mock_edges: List[Dict[str, Any]] = []
@@ -53,7 +53,7 @@ class NeptuneGremlinClient:
         env_url = os.environ.get("GREMLIN_ENDPOINT")
         if env_url:
             return env_url
-        
+
         host = os.environ.get("GREMLIN_HOST", "dev-gremlin")
         port = os.environ.get("GREMLIN_PORT", "8182")
         protocol = "wss" if "amazonaws.com" in host else "ws"
@@ -111,7 +111,7 @@ class NeptuneGremlinClient:
                 t = self.g.V().hasLabel("Cliente").has("documentoNormalizado", documento_normalizado)
                 t = t.valueMap(True) if hasattr(t, "valueMap") else t.value_map(True)
                 resultados = t.toList() if hasattr(t, "toList") else t.to_list()
-                
+
                 candidatos = []
                 for res in resultados:
                     candidato = {}
@@ -150,17 +150,16 @@ class NeptuneGremlinClient:
                         .iterate()
                     )
                     return codigo_cu
-                else:
-                    (
-                        self.g.addV("Cliente")
-                        .property("codigoCu", codigo_cu)
-                        .property("documentoNormalizado", documento_normalizado)
-                        .property("nombreCompleto", nombre_completo)
-                        .property("tipoPersona", tipo_persona)
-                        .property("estado", estado)
-                        .iterate()
-                    )
-                    return codigo_cu
+                (
+                    self.g.addV("Cliente")
+                    .property("codigoCu", codigo_cu)
+                    .property("documentoNormalizado", documento_normalizado)
+                    .property("nombreCompleto", nombre_completo)
+                    .property("tipoPersona", tipo_persona)
+                    .property("estado", estado)
+                    .iterate()
+                )
+                return codigo_cu
             except Exception as e:
                 logger.error(f"Error en upsert_cliente en Neptune: {e}")
 

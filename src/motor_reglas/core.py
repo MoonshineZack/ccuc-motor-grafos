@@ -5,7 +5,7 @@ y coordina los puntos de control del procesamiento.
 """
 import hashlib
 import json
-from typing import Dict, Any, Set, Optional, Callable
+from typing import Optional, Callable
 
 
 def hash_payload(payload: dict) -> str:
@@ -41,17 +41,17 @@ def process_novedad(
     if huella in seen:
         return "duplicado"
     seen.add(huella)
-    
+
     if touch is not None:
         touch(payload)
-        
+
     # Validar tanto 'estado' como 'estadoCliente'
     estado = payload.get("estado")
     if estado is None:
         estado = payload.get("estadoCliente", "")
-        
+
     activo = can_intersect(estado)
     if write_edge is not None and activo:
         write_edge(payload)
-        
+
     return "nuevo" if activo else "inactivo"

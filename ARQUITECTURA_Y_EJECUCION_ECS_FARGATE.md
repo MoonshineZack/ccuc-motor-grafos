@@ -80,12 +80,17 @@ El componente en **Amazon ECS Fargate** actúa como el núcleo orquestador del p
 * **Construcción del Payload Tríada:** Consolida los identificadores resueltos (`codigoCu`, `codigoPvu`, `golden_record_id`), atributos limpios, score de calidad y metadatos del grafo.
 * **Invocación a Lambda Egress:** Envía la tríada a la Lambda `ccuc-egress-orchestrator` con `InvocationType=RequestResponse`. La Lambda se activa con ese evento y escribe el archivo en el bucket S3:
   ```
-  s3://ccuc-landing/triadas-resueltas/{codigoCu}/{timestamp}_payload.json
+  s3://ccuc-landing/triadas-resueltas/{codigoCu}/{sha256(payload)}_payload.json
   ```
+  La clave se deriva del hash SHA-256 del payload (claves ordenadas), por lo que
+  un reintento con el mismo contenido sobrescribe el mismo objeto (idempotencia).
 * **Contrato del evento:** el handler acepta invocación directa (evento = tríada),
   `body` de API Gateway, `detail` de EventBridge y `Records` de SQS. En AWS usa
   el rol IAM de la Lambda; solo usa `endpoint_url`/credenciales estáticas cuando
   existe `ENDPOINT_URL` (LocalStack).
+* **Errores:** si el handler falla, la excepción se relanza para que Lambda
+  reporte `FunctionError`. ECS valida `FunctionError`, el `StatusCode` HTTP y el
+  `statusCode` del body antes de confirmar el mensaje.
 * **Confirmación SQS (`delete_message`):** el mensaje se elimina **solo** cuando
   la Lambda confirma la persistencia (`statusCode < 400`). Si la invocación falla,
   el orquestador lanza `TriadaEgressError`, no confirma el mensaje y este se
@@ -189,11 +194,11 @@ docker compose exec dev-localstack awslocal s3 ls s3://ccuc-landing/triadas-resu
 ```
 Salida esperada (ejemplo real de la prueba):
 ```text
-2026-10-20 17:04:30        699 triadas-resueltas/CU-444555666/20261020170430338172_payload.json
+2026-10-20 17:04:30        699 triadas-resueltas/CU-444555666/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08_payload.json
 ```
 6.2. **Ver el contenido de un archivo concreto** En este caso luego de la ruta ccuc-landing/triadas-resueltas/ con el comando anterior copia y pega la ruta del **.json**
 ```powershell
-docker compose exec dev-localstack awslocal s3 cp s3://ccuc-landing/triadas-resueltas/CU-444555666/20261020170430338172_payload.json -
+docker compose exec dev-localstack awslocal s3 cp s3://ccuc-landing/triadas-resueltas/CU-444555666/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08_payload.json -
 ```
 
 ---

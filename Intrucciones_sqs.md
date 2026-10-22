@@ -26,10 +26,12 @@ S3 (Zona de salida - Data Lake).
   en AWS usa el rol IAM y el endpoint real de S3.
 - Recibe el evento de envío de la tríada desde el Motor de Reglas (ECS) y también
   soporta eventos de API Gateway, EventBridge y SQS.
-- Genera un archivo `.json` particionado por el `codigoCu` y un `timestamp`.
+- Genera un archivo `.json` particionado por el `codigoCu` y el hash SHA-256 del
+  payload (`{sha256}_payload.json`), lo que hace la escritura idempotente.
 - Lo almacena en el bucket S3 (para este ejercicio, `ccuc-landing`).
-- Si la escritura falla devuelve `statusCode 500`; el Motor de Reglas entonces
-  **no** elimina el mensaje de SQS para que se reintente o caiga a la DLQ.
+- Si la escritura falla, el handler relanza la excepción y Lambda reporta
+  `FunctionError`; el Motor de Reglas entonces **no** elimina el mensaje de SQS
+  para que se reintente o caiga a la DLQ.
 
 ### ¿Cómo probar la Lambda localmente?
 
@@ -59,4 +61,4 @@ docker exec -it dev-localstack awslocal lambda invoke \
 o
 > `docker exec -it dev-localstack awslocal s3 ls s3://ccuc-landing/triadas-resueltas/ --recursive`
 Para vel el contenido: (En la parte del CU-101 para adelante lo que le sale de la consola copian y pegan)
-> `docker exec -it dev-localstack awslocal s3 cp s3://ccuc-landing/triadas-resueltas/CU-1001/20261008130046_payload.json -`
+> `docker exec -it dev-localstack awslocal s3 cp s3://ccuc-landing/triadas-resueltas/CU-1001/9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08_payload.json -`

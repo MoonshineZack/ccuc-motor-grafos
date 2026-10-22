@@ -28,15 +28,15 @@ def normalize_document(doc: Optional[Any]) -> Tuple[str, bool]:
     """
     if doc is None:
         return "", False
-    
+
     doc_str = clean_text(str(doc))
     # Quitar puntos, guiones, comas, espacios
     cleaned = re.sub(r'[^0-9A-Z]', '', doc_str)
-    
+
     # Validar que no sea vacío ni secuencias inválidas típicas
     if not cleaned or cleaned in {"0", "00", "000", "0000", "NULL", "NONE", "UNKNOWN"}:
         return cleaned, False
-    
+
     # Si tiene al menos 5 caracteres numéricos/alfanuméricos se considera preliminarmente válido
     return cleaned, len(cleaned) >= 5
 
@@ -46,7 +46,7 @@ def normalize_razon_social(razon: Optional[str]) -> str:
     text = clean_text(razon)
     if not text:
         return ""
-    
+
     # Patrones societarios colombianos
     suffixes = [
         r'\bS\.?A\.?S\.?\b',
@@ -61,7 +61,7 @@ def normalize_razon_social(razon: Optional[str]) -> str:
     ]
     for pattern in suffixes:
         text = re.sub(pattern, '', text)
-    
+
     # Limpiar puntuaciones residuales
     text = re.sub(r'[^0-9A-Z\s]', '', text)
     return re.sub(r'\s+', ' ', text).strip()
@@ -148,7 +148,7 @@ def calculate_h3_index(
             return h3.geo_to_h3(lat, lon, resolution)
         except (ImportError, Exception):
             pass
-    
+
     if fallback_key:
         import hashlib
         return "h3_cell_" + hashlib.md5(fallback_key.encode()).hexdigest()[:10]

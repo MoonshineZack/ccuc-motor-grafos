@@ -17,8 +17,20 @@ El cliente de S3 se crea de forma perezosa y **solo** usa ``endpoint_url`` y
 credenciales estáticas cuando se configura explícitamente ``ENDPOINT_URL``
 (LocalStack). En AWS se usa el rol de ejecución de la Lambda (IAM), que es lo
 correcto para producción.
+
+Idempotencia
+------------
+La clave S3 se deriva del hash SHA-256 del payload (claves ordenadas), no de un
+timestamp. Un reintento con el mismo contenido sobrescribe el mismo objeto en
+lugar de duplicarlo.
+
+Manejo de errores
+-----------------
+Si el procesamiento falla, la excepción se relanza para que Lambda reporte
+``FunctionError`` y el origen del evento (ECS, SQS, EventBridge o API Gateway)
+pueda reintentar o derivar a la DLQ.
 """
-import datetime
+import hashlib
 import json
 import logging
 import os
@@ -34,7 +46,7 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
 TARGET_BUCKET = os.getenv("DATALAKE_BUCKET", "ccuc-landing")
 PREFIX = "triadas-resueltas"
 
-_s3_client = None
+_s3_client = None  # pylint: disable=invalid-name
 
 
 def _endpoint_url() -> str | None:
@@ -45,7 +57,7 @@ def _endpoint_url() -> str | None:
 
 def get_s3_client():
     """Crea (una sola vez) el cliente S3 según el entorno de ejecución."""
-    global _s3_client
+    global _s3_client  # pylint: disable=global-statement
     if _s3_client is not None:
         return _s3_client
 
@@ -116,9 +128,20 @@ def _safe_cu(codigo_cu: Any) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", valor) or "UNKNOWN_CU"
 
 
-def _build_s3_key(codigo_cu: Any) -> str:
-    timestamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d%H%M%S%f")
-    return f"{PREFIX}/{_safe_cu(codigo_cu)}/{timestamp}_payload.json"
+def _payload_hash(payload: Dict[str, Any]) -> str:
+    """Hash determinístico del payload (clave de idempotencia en S3).
+
+    Se serializa con claves ordenadas y sin espacios para que el mismo
+    contenido produzca siempre la misma huella, sin importar el orden de las
+    claves en el JSON de entrada.
+    """
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _build_s3_key(codigo_cu: Any, payload: Dict[str, Any]) -> str:
+    """Clave S3 determinística: reintentos del mismo payload se sobrescriben."""
+    return f"{PREFIX}/{_safe_cu(codigo_cu)}/{_payload_hash(payload)}_payload.json"
 
 
 def _put_object(s3, key: str, payload: Dict[str, Any]) -> None:
@@ -151,7 +174,7 @@ def _persistir(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not codigo_cu:
         raise ValueError("El payload de la tríada no contiene 'codigoCu'")
 
-    key = _build_s3_key(codigo_cu)
+    key = _build_s3_key(codigo_cu, payload)
     _put_object(get_s3_client(), key, payload)
     logger.info("Tríada escrita en s3://%s/%s", TARGET_BUCKET, key)
     return {
@@ -161,7 +184,7 @@ def _persistir(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def lambda_handler(event, context):
+def lambda_handler(event, _context):
     """Punto de entrada de la Lambda Egress Orchestrator."""
     try:
         logger.info("Lambda Egress Orchestrator invocada con evento: %s", event)
@@ -182,12 +205,12 @@ def lambda_handler(event, context):
                 ensure_ascii=False,
             ),
         }
-    except Exception as exc:  # noqa: BLE001 - se reporta como error controlado
+    except Exception as exc:  # noqa: BLE001 - se relanza para que Lambda marque FunctionError
         logger.exception("Error procesando la tríada en Lambda Egress: %s", exc)
-        return {
-            "statusCode": 500,
-            "body": json.dumps({"error": str(exc)}, ensure_ascii=False),
-        }
+        # No se devuelve un 500 en el body: se relanza la excepción para que
+        # Lambda reporte FunctionError. Así SQS/EventBridge/API Gateway y el
+        # invocador síncrono (ECS) pueden reintentar o enviar a DLQ.
+        raise
 
 
 # Código auxiliar para probar la Lambda de manera local
