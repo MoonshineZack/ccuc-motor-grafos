@@ -11,7 +11,7 @@ está corriendo pruebas. Spec completa: [`spec-laboratorio-devops-ccuc.md`](spec
   docker compose version && docker info   # el daemon debe estar encendido
   ```
 - **Puertos libres** en tu máquina: `4566` (LocalStack), `8182` (Gremlin), `9200` (OpenSearch).
-- **Python 3.12** (solo si vas a correr pytest fuera del contenedor o el CDK).
+- **Python 3.14** (imagen `python:3.14.5-slim-trixie`; solo si vas a correr pytest fuera del contenedor o el CDK).
 - (opcional) AWS CLI v2 + [`awslocal`](https://github.com/localstack/awscli-local): `pip install awscli-local`
 - (solo despliegue) Node.js 22+ para el CDK CLI (`npx aws-cdk`)
 
@@ -34,7 +34,7 @@ docker compose up -d
 ```
 
 > **Primera vez:** se descargan ~2 GB de imágenes (LocalStack, OpenSearch, Gremlin,
-> Python 3.12) y se construye la imagen de `dev-motor-reglas`; toma unos minutos.
+> Python 3.14.5-slim-trixie) y se construye la imagen de `dev-motor-reglas`; toma unos minutos.
 > Corridas siguientes arrancan en menos de 1 minuto.
 
 ### 3. Verificar que los 4 contenedores estén healthy
@@ -47,10 +47,14 @@ Salida esperada (los 4 en `(healthy)`):
 
 | Contenedor | Servicio | Puerto |
 |---|---|---|
-| `dev-localstack` | LocalStack: SQS, S3, EventBridge | 4566 |
+| `dev-localstack` | LocalStack: SQS, S3, EventBridge y Lambda | 4566 |
 | `dev-gremlin` | Gremlin Server (simula Neptune) | 8182 |
 | `dev-opensearch` | OpenSearch single-node, sin seguridad | 9200 |
 | `dev-motor-reglas` | Microservicio con hot-reloading | — |
+
+> LocalStack usa el socket de Docker para ejecutar la Lambda Egress
+> (`ccuc-egress-orchestrator`) como contenedor. Es la misma Lambda que el
+> Motor de Reglas invoca en el **Paso 4** con el evento de envío de la tríada.
 
 Si alguno queda `(unhealthy)` o `Exited`: revisa sus logs con
 `docker compose logs <nombre-del-contenedor>`.
@@ -62,11 +66,14 @@ Si alguno queda `(unhealthy)` o `Exited`: revisa sus logs con
 docker compose exec dev-localstack awslocal sqs list-queues
 # Buckets S3
 docker compose exec dev-localstack awslocal s3api list-buckets --query 'Buckets[].Name' --output text
+# Lambda Egress (Paso 4)
+docker compose exec dev-localstack awslocal lambda list-functions --query 'Functions[].FunctionName' --output text
 ```
 
 Debe aparecer exactamente:
 - Colas: `ccuc-novedades-prod.fifo` y `ccuc-novedades-dlq.fifo`
 - Buckets: `ccuc-landing` y `ccuc-staging`
+- Lambda: `ccuc-egress-orchestrator`
 
 Comprobación extra de la cola principal (deduplicación + DLQ):
 
@@ -136,12 +143,67 @@ docker compose down      # borra los contenedores; nada se pierde: al volver a
      --message-group-id g1
    ```
 
-## Pruebas (obligatorias antes de push)
+### Paso 4: disparo de la Lambda Egress
+
+El consumidor ECS **no** compite con la Lambda por la cola: es el único que hace
+long polling. Al terminar el Paso 3, invoca `ccuc-egress-orchestrator` con el
+`Payload Tríada` como evento (`InvocationType=RequestResponse`). En local esa
+invocación va a la Lambda real desplegada en LocalStack y esta escribe en
+`s3://ccuc-landing/triadas-resueltas/{codigoCu}/{sha256(payload)}_payload.json`.
+La clave es determinística: si el mismo payload se reintenta, se sobrescribe el
+mismo objeto en lugar de duplicarlo.
+
+El handler acepta evento directo, `body` de API Gateway, `detail` de EventBridge
+y `Records` de SQS. Si el servicio Lambda no está disponible en local, el motor
+usa un *fallback* de invocación directa del módulo. Si ambas rutas fallan, el
+mensaje **no** se elimina de SQS y se reintenta / cae a la DLQ. Los errores del
+handler se relanzan para que Lambda reporte `FunctionError` (no se devuelve un
+`statusCode 500` en el body).
+
+### Validación de estructura y descarte a DLQ
+
+Antes de ejecutar el pipeline, el consumidor exige la presencia de los **10
+campos críticos** del contrato de la Capa Media
+(`src/motor_reglas/validacion.py`):
+
+`CodigoTransaccional`, `razonSocial`, `documento`, `pais`, `direccion`, `barrio`,
+`codigoCiudad`, `codigoDepartamento`, `estadoCliente`, `situacionCliente`.
+
+La validación es de presencia de claves, no de contenido: `razonSocial` o
+`barrio` pueden llegar como `""`/`null` y el mensaje se considera válido. El
+resto de campos del contrato (`primerNombre`, `segundoNombre`, `direccion2`,
+`peticionDeBorrado`, etc.) son opcionales y si no vienen **no** descartan el
+mensaje.
+
+Si el JSON es inválido o falta al menos uno de los 10 campos críticos, el
+mensaje se envía de inmediato a `ccuc-novedades-dlq.fifo` con el atributo
+`motivoDlq` (por ejemplo
+`ESTRUCTURA_INVALIDA: faltan 2 campo(s): documento, codigoCiudad`) y se elimina
+de la cola principal **sin** tocar Neptune ni la Lambda Egress. Si el envío a la
+DLQ falla, el mensaje permanece en la cola y aplica el `redrive policy`
+(`maxReceiveCount=5`).
+
+Los errores transitorios del pipeline (Neptune, Lambda Egress) **no** van a la
+DLQ: el mensaje no se borra y se reintenta.
+
+Variables de entorno relevantes: `DLQ_URL` (o `DLQ_NAME`, por defecto
+`ccuc-novedades-dlq.fifo`). En AWS, el task role requiere `sqs:SendMessage`
+sobre la DLQ, otorgado por `dlq.grant_send_messages(...)` en `infra/app.py`.
+
+## Pruebas y análisis estático (obligatorios antes de push)
 
 ```bash
+# Dentro del contenedor de desarrollo
 docker exec -it dev-motor-reglas bash
 cd /app && pytest ../tests/ -v
+
+# Fuera del contenedor (requiere pip install -r requirements.txt)
+python -m pytest tests/ -v
+python -m pylint src infra/app.py
 ```
+
+La configuración de `pylint` está en [`.pylintrc`](.pylintrc) y el pipeline la
+ejecuta como paso bloqueante (`Análisis estático (pylint)`).
 
 Dos pruebas son **críticas** y el pipeline las convierte en bloqueo de merge:
 
@@ -149,6 +211,10 @@ Dos pruebas son **críticas** y el pipeline las convierte en bloqueo de merge:
 |---|---|---|
 | Idempotencia | `tests/test_idempotency.py` | Los duplicados se descartan por `hashPayload` **antes** de tocar OpenSearch/Neptune (100%). |
 | Tabla de verdad | `tests/test_truth_table.py` | Cliente en estado Inactivo ("I") → **NO** se crea la arista `:INTERSECTA`. |
+| Lambda Egress | `tests/test_lambda_egress.py` | La Lambda se activa con el evento de envío (directo, API GW o SQS) y escribe la tríada en S3. |
+| Contrato del payload | `tests/test_validacion_payload.py` | El mensaje debe traer los 10 campos críticos; los 11 campos complementarios no bloquean. |
+| Descarte a DLQ | `tests/test_consumer_dlq.py` | Estructura incompleta o JSON inválido → DLQ sin ejecutar el pipeline; errores transitorios → reintento. |
+| Orquestador | `tests/test_orchestrator.py` | El Paso 4 invoca la Lambda con la tríada y **no** confirma el mensaje SQS si el egress falla. |
 
 > El equipo de desarrollo implementa la lógica real dentro de `src/motor_reglas/core.py`;
 > la infraestructura para ejecutarlas ya está lista.
@@ -165,22 +231,24 @@ Dos pruebas son **críticas** y el pipeline las convierte en bloqueo de merge:
 | Mensaje "no aparece" en la cola | Deduplicación de contenido (ventana de 5 min) | Cambia el cuerpo del mensaje (distinto `nonce`); es el comportamiento esperado |
 | `pytest: command not found` fuera del contenedor | Dependencias no instaladas | `pip install -r requirements.txt` (o corre los tests dentro del contenedor como está arriba) |
 | Primer `docker compose up` muy lento | Descarga de ~2 GB de imágenes | Espera; solo pasa la primera vez |
+| La Lambda Egress no se ejecuta en local | LocalStack sin `lambda` o sin socket Docker | Verifica `docker compose exec dev-localstack awslocal lambda list-functions`; revisa `docker compose logs dev-localstack` |
+| Error de Gremlin `Could not locate method: DefaultGraphTraversal.discard()` | `gremlinpython` 3.8 contra Gremlin Server 3.7 | Usa `gremlinpython>=3.7.0,<3.8.0` (ya fijado en `requirements.txt`) y reconstruye la imagen |
 
 ## Despliegue (CI/CD)
 
-- **Merge a `develop`** → pipeline ejecuta `pytest` + `cdk synth` y despliega a AWS Dev/QA.
+- **Merge a `develop`** → pipeline ejecuta `pytest` + `pylint` + `cdk synth` y despliega a AWS Dev/QA.
   Los desarrolladores **no** despliegan a mano.
 - Configuración única en GitHub:
   1. Secrets del job `deploy`: `AWS_ROLE_ARN` (rol OIDC) y `AWS_REGION`.
-  2. Branch protection en `develop`: requerir los checks `Pruebas críticas` y `cdk synth`
-     (esto es lo que **bloquea el merge** si una prueba falla).
+  2. Branch protection en `develop`: requerir los checks `Análisis estático (pylint)`,
+     `Pruebas críticas` y `cdk synth` (esto es lo que **bloquea el merge** si algo falla).
 
 Infraestructura como código en [`infra/`](infra/) — despliegue manual (solo DevOps):
 
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r infra/requirements.txt
-cd infra && npx aws-cdk@2 synth   # valida; npx aws-cdk@2 deploy para desplegar
+cd infra && npx aws-cdk@2.1128.1 synth   # valida; npx aws-cdk@2.1128.1 deploy para desplegar
 ```
 
 ## FinOps: horario y apagado automático
@@ -216,6 +284,12 @@ cd infra && npx aws-cdk@2 synth   # valida; npx aws-cdk@2 deploy para desplegar
 - **Deduplicación SQS**: la nativa de la cola solo cubre una ventana de **5 minutos**.
   La idempotencia real con `hashPayload` en la aplicación es obligatoria
   (`src/motor_reglas/core.py`).
+- **Lambda Egress**: en local se ejecuta dentro de LocalStack (requiere el socket
+  de Docker y el servicio `lambda` habilitado). En AWS usa el rol IAM de la
+  función y el endpoint real de S3; el código no hardcodea credenciales ni
+  `localhost`. El Motor de Reglas invoca la Lambda en el **Paso 4** con el
+  `Payload Tríada`; no hay un *event source mapping* de SQS para evitar
+  consumidores competidores con ECS.
 
 ## Preguntas abiertas (propuestas de la estimación — se confirman con Producto)
 
@@ -235,7 +309,7 @@ cd infra && npx aws-cdk@2 synth   # valida; npx aws-cdk@2 deploy para desplegar
 
 > ⚠️ **Riesgo conocido:** destruir/recrear el NAT Gateway fuera de CloudFormation genera
 > *drift* en la VPC; el primer `cdk deploy` posterior puede requerir
-> `npx aws-cdk@2 deploy --force`. Alternativa futura: VPC endpoints (SQS/S3/EC2/SSM)
+> `npx aws-cdk@2.1128.1 deploy --force`. Alternativa futura: VPC endpoints (SQS/S3/EC2/SSM)
 > para eliminar el NAT por completo.
 
 ## Estructura del repositorio
@@ -247,8 +321,10 @@ ccuc-motor-grafos/
 │   └── lambdas/              # ciclo de vida (FinOps) + orquestador
 ├── src/                      # Microservicios
 │   ├── motor_reglas/         # consumidor SQS + core de reglas
-│   └── motor_calidad/
+│   ├── motor_calidad/
+│   └── lambda_egress/        # Lambda Egress Orchestrator (Paso 4)
 ├── tests/                    # Pruebas (pytest) — bloquean merge
+├── .pylintrc                 # Reglas de análisis estático (pylint)
 ├── scripts/
 │   └── init-aws.sh           # Bootstrap de LocalStack
 ├── docker-compose.yml
