@@ -53,7 +53,7 @@ El componente en **Amazon ECS Fargate** actúa como el núcleo orquestador del p
 ### Paso 1: Ingesta e Idempotencia Estricta (`src/motor_reglas/main.py` y `core.py`)
 * **Long Polling SQS:** Consumo continuo sobre la cola `ccuc-novedades-prod.fifo` utilizando `WaitTimeSeconds=20` y `VisibilityTimeout=300`.
 * **Deduplicación por `hashPayload`:** Antes de consultar servicios de red, se calcula una huella SHA-256 canónica del JSON recibido. Si el mensaje ya fue procesado, se descarta inmediatamente, evitando costos y operaciones innecesarias.
-* **Control de Errores y DLQ:** Los mensajes con errores estructurales (ej. JSON malformado o documentos inválidos) son manejados sin bloquear el hilo principal, permitiendo que tras los reintentos pasen a la cola de mensajes no procesados (DLQ).
+* **Control de Errores y DLQ:** Antes de ejecutar el pipeline se valida el contrato del mensaje (`validacion.py`): si el JSON es malformado o falta alguno de los 10 campos obligatorios (`CodigoTransaccional`, `razonSocial`, `documento`, `pais`, `direccion`, `barrio`, `codigoCiudad`, `codigoDepartamento`, `estadoCliente`, `situacionCliente`), el mensaje se envía de inmediato a `ccuc-novedades-dlq.fifo` con el motivo en `motivoDlq` y se elimina de la cola principal. Los errores transitorios (Neptune/Lambda) no se descartan: el mensaje se reintenta y, agotado `maxReceiveCount`, cae a la DLQ.
 
 ### Paso 2: Motor de Calidad CU/PVU con RapidFuzz (`src/motor_calidad/`)
 * **Normalización de Identificación:** Limpieza de cédulas y NITs eliminando caracteres especiales, espacios y guiones (`normalize_document`).
@@ -104,7 +104,7 @@ El componente en **Amazon ECS Fargate** actúa como el núcleo orquestador del p
 Se actualizaron los recursos de CDK v2 (versión `2.1128.1`) y las políticas de seguridad:
 
 1. **IAM Task Role de ECS (`MotorReglasTask`):**
-   * `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` sobre la cola FIFO y DLQ.
+   * `sqs:ReceiveMessage`, `sqs:DeleteMessage`, `sqs:GetQueueAttributes` sobre la cola FIFO y `sqs:SendMessage` sobre la DLQ (descarte inmediato de mensajes con estructura inválida).
    * `neptune-db:connect`, `neptune-db:ReadDataViaQuery`, `neptune-db:WriteDataViaQuery` para consultas Gremlin sobre Neptune.
    * `lambda:InvokeFunction` para invocar la función `ccuc-egress-orchestrator`.
    * `cloudwatch:PutMetricData` sobre el espacio de nombres `CCUC/MotorReglas` para publicar la métrica `BacklogPerTask`.

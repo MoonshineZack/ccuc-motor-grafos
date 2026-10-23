@@ -52,12 +52,37 @@ def main():
                 # Opcional: limpiar los espacios en blanco alrededor de las claves y valores
                 data = {k.strip(): v.strip() for k, v in row.items() if k is not None}
 
-                msg_body = json.dumps(data)
+                # Mapeo de la estructura CSV al contrato JSON esperado por el
+                # consumidor (mismas 21 claves que valida src/motor_reglas/validacion.py).
+                payload = {
+                    "CodigoTransaccional": data.get('step_id_cliente_unico', ''),
+                    "primerNombre": data.get('agentname', ''),
+                    "segundoNombre": "",
+                    "primerApellido": "",
+                    "segundoApellido": "",
+                    "razonSocial": data.get('companyname', ''),
+                    "documento": data.get('fiscalid', ''),
+                    "direccion": data.get('address', ''),
+                    "direccion2": "",
+                    "direccion3": "",
+                    "direccion4": "",
+                    "direccion5": "",
+                    "barrio": data.get('neighborhood', ''),
+                    "codigoCiudad": data.get('municipality', ''),
+                    "codigoDepartamento": data.get('department', ''),
+                    "pais": "Colombia",
+                    "nombreNegocio": data.get('establishmentname', ''),
+                    "estadoCliente": data.get('statuscodedesc', 'Activo'),
+                    "peticionDeBorrado": "No",
+                    "peticionDeBorradoIndividual": "No",
+                    "situacionCliente": "Creado",
+                }
+
+                msg_body = json.dumps(payload)
 
                 # Obtenemos el documento para usarlo como MessageGroupId.
                 # En un CSV, los campos vacíos se leen como cadenas vacías (''), no como None.
-                #doc = data.get('documento')
-                doc = data.get('fiscalid')
+                doc = payload.get('documento')
                 group_id = str(doc) if doc else 'SIN_DOCUMENTO'
 
                 # 3. Enviar el mensaje a la cola FIFO

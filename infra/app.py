@@ -212,6 +212,7 @@ class CcucDevQaStack(Stack):
             logging=ecs.LogDrivers.aws_logs(stream_prefix="motor-reglas", log_group=task_logs),
             environment={
                 "QUEUE_URL": queue.queue_url,
+                "DLQ_URL": dlq.queue_url,
                 "ENDPOINT_URL": "",
                 "OPENSEARCH_ENDPOINT": domain.domain_endpoint,
                 "GREMLIN_HOST": neptune_cluster.attr_endpoint,
@@ -220,6 +221,9 @@ class CcucDevQaStack(Stack):
             },
         )
         queue.grant_consume_messages(task_def.task_role)
+        # Necesario para descartar de inmediato los mensajes con estructura
+        # inválida (claves faltantes) sin esperar el redrive policy.
+        dlq.grant_send_messages(task_def.task_role)
         egress_lambda.grant_invoke(task_def.task_role)
 
         # Reglas IAM para Amazon Neptune Serverless (Gremlin API)

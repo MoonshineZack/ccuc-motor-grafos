@@ -1,5 +1,4 @@
 """Servicio ECS Fargate: Consumidor de novedades SQS FIFO y Orquestador de Reglas CCUC."""
-import json
 import logging
 import os
 import signal
@@ -11,6 +10,7 @@ from botocore.exceptions import ClientError
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # pylint: disable=wrong-import-position
+from motor_reglas.consumer import procesar_mensaje  # noqa: E402
 from motor_reglas.orchestrator import CCUCOrchestrator  # noqa: E402
 
 logging.basicConfig(
@@ -51,6 +51,22 @@ def main():
 
     logger.info(f"Iniciando consumidor ECS Fargate sobre cola: {queue_url}")
 
+    # DLQ explícita: los mensajes con estructura inválida se descartan de
+    # inmediato en lugar de esperar maxReceiveCount reintentos.
+    dlq_url = os.environ.get("DLQ_URL")
+    if not dlq_url:
+        dlq_name = os.environ.get("DLQ_NAME", "ccuc-novedades-dlq.fifo")
+        try:
+            dlq_url = sqs.get_queue_url(QueueName=dlq_name)["QueueUrl"]
+        except ClientError as e:
+            logger.warning(
+                f"No se pudo resolver la DLQ {dlq_name}: {e}. "
+                "Los mensajes inválidos se moverán por redrive policy."
+            )
+            dlq_url = None
+    if dlq_url:
+        logger.info(f"DLQ configurada: {dlq_url}")
+
     # Inicializar orquestador central
     orchestrator = CCUCOrchestrator()
 
@@ -78,31 +94,9 @@ def main():
                 continue
 
             for msg in messages:
-                receipt_handle = msg["ReceiptHandle"]
-                msg_id = msg.get("MessageId", "N/A")
-
-                try:
-                    payload = json.loads(msg["Body"])
-                except json.JSONDecodeError as err:
-                    logger.error(f"Mensaje {msg_id} con JSON inválido: {err}. Descartando a DLQ.")
-                    continue
-
-                try:
-                    # Ejecutar el flujo de orquestación de 4 pasos
-                    resultado = orchestrator.procesar_novedad(payload, seen_cache=seen)
-                    logger.info(f"Resultado procesamiento msg {msg_id}: {resultado}")
-
-                    # Solo se confirma (delete) si la tríada quedó persistida en
-                    # el Data Lake. Un error de egress deja el mensaje en la cola.
-                    if resultado.get("status") not in {"procesado", "duplicado"}:
-                        raise RuntimeError(f"Procesamiento no confirmado: {resultado}")
-
-                    sqs.delete_message(QueueUrl=queue_url, ReceiptHandle=receipt_handle)
-                    logger.info(f"Mensaje {msg_id} eliminado exitosamente de SQS FIFO.")
-
-                except Exception as e:
-                    logger.error(f"Error procesando novedad {msg_id}: {e}", exc_info=True)
-                    # El mensaje queda invisible hasta timeout y redrive hacia DLQ tras max_receive_count
+                # Validación de estructura + pipeline + confirmación/DLQ.
+                # Los mensajes con claves faltantes nunca llegan al orquestador.
+                procesar_mensaje(sqs, queue_url, dlq_url, msg, orchestrator, seen)
 
         except ClientError as e:
             logger.error(f"Error de cliente AWS SQS: {e}")

@@ -35,6 +35,7 @@ def main():
     dummy_messages = [
         {
             # Caso 1: Persona Natural completa
+            "CodigoTransaccional": "TX-0001",
             "primerNombre": "Juan",
             "segundoNombre": "Carlos",
             "primerApellido": "Pérez",
@@ -58,6 +59,7 @@ def main():
         },
         {
             # Caso 2: Persona Natural con variaciones (para evaluar Fuzzy Matching)
+            "CodigoTransaccional": "TX-0002",
             "primerNombre": "Maria",
             "segundoNombre": "Fernanda",
             "primerApellido": "Lopez",
@@ -81,6 +83,7 @@ def main():
         },
         {
             # Caso 3: Persona Jurídica (con Razón Social)
+            "CodigoTransaccional": "TX-0003",
             "primerNombre": "",
             "segundoNombre": "",
             "primerApellido": "",
@@ -104,9 +107,69 @@ def main():
         },
         {
             # Caso 4: ERROR - Falta el documento (para probar validaciones del motor)
+            "CodigoTransaccional": "TX-0004",
             "primerNombre": "Cliente",
             "segundoNombre": "Sin",
             "primerApellido": "Documento",
+            "segundoApellido": "",
+            "razonSocial": "",
+            "documento": None,
+            "direccion": "Desconocida",
+            "direccion2": "",
+            "direccion3": "",
+            "direccion4": "",
+            "direccion5": "",
+            "barrio": "",
+            "codigoCiudad": "0000",
+            "codigoDepartamento": "0",
+            "pais": "Colombia",
+            "nombreNegocio": "Negocio Error",
+            "estadoCliente": "Inactivo",
+            "peticionDeBorrado": "Si",
+            "peticionDeBorradoIndividual": "No",
+            "situacionCliente": "Creado"
+        },
+        {
+            # Caso 4: ERROR - Falta del codigo transaccional
+            "primerNombre": "Cliente",
+            "segundoNombre": "Sin",
+            "primerApellido": "Documento",
+            "segundoApellido": "",
+            "razonSocial": "",
+            "documento": None,
+            "direccion": "Desconocida",
+            "direccion2": "",
+            "direccion3": "",
+            "direccion4": "",
+            "direccion5": "",
+            "barrio": "",
+            "codigoCiudad": "0000",
+            "codigoDepartamento": "0",
+            "pais": "Colombia",
+            "nombreNegocio": "Negocio Error",
+            "estadoCliente": "Inactivo",
+            "peticionDeBorrado": "Si",
+            "peticionDeBorradoIndividual": "No",
+            "situacionCliente": "Creado"
+        },
+        {
+            # Caso 5: ERROR - Falta de campos
+            "barrio": "",
+            "codigoCiudad": "0000",
+            "codigoDepartamento": "0",
+            "pais": "Colombia",
+            "nombreNegocio": "Negocio Error",
+            "estadoCliente": "Inactivo",
+            "peticionDeBorrado": "Si",
+            "peticionDeBorradoIndividual": "No",
+            "situacionCliente": "Creado"
+        },
+        {
+            # Caso 6: ERROR - Falta de valores en las llaves
+            "CodigoTransaccional": "",
+            "primerNombre": "",
+            "segundoNombre": "",
+            "primerApellido": "",
             "segundoApellido": "",
             "razonSocial": "",
             "documento": None,

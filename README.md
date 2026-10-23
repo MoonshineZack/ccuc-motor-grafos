@@ -160,6 +160,36 @@ mensaje **no** se elimina de SQS y se reintenta / cae a la DLQ. Los errores del
 handler se relanzan para que Lambda reporte `FunctionError` (no se devuelve un
 `statusCode 500` en el body).
 
+### Validación de estructura y descarte a DLQ
+
+Antes de ejecutar el pipeline, el consumidor exige la presencia de los **10
+campos críticos** del contrato de la Capa Media
+(`src/motor_reglas/validacion.py`):
+
+`CodigoTransaccional`, `razonSocial`, `documento`, `pais`, `direccion`, `barrio`,
+`codigoCiudad`, `codigoDepartamento`, `estadoCliente`, `situacionCliente`.
+
+La validación es de presencia de claves, no de contenido: `razonSocial` o
+`barrio` pueden llegar como `""`/`null` y el mensaje se considera válido. El
+resto de campos del contrato (`primerNombre`, `segundoNombre`, `direccion2`,
+`peticionDeBorrado`, etc.) son opcionales y si no vienen **no** descartan el
+mensaje.
+
+Si el JSON es inválido o falta al menos uno de los 10 campos críticos, el
+mensaje se envía de inmediato a `ccuc-novedades-dlq.fifo` con el atributo
+`motivoDlq` (por ejemplo
+`ESTRUCTURA_INVALIDA: faltan 2 campo(s): documento, codigoCiudad`) y se elimina
+de la cola principal **sin** tocar Neptune ni la Lambda Egress. Si el envío a la
+DLQ falla, el mensaje permanece en la cola y aplica el `redrive policy`
+(`maxReceiveCount=5`).
+
+Los errores transitorios del pipeline (Neptune, Lambda Egress) **no** van a la
+DLQ: el mensaje no se borra y se reintenta.
+
+Variables de entorno relevantes: `DLQ_URL` (o `DLQ_NAME`, por defecto
+`ccuc-novedades-dlq.fifo`). En AWS, el task role requiere `sqs:SendMessage`
+sobre la DLQ, otorgado por `dlq.grant_send_messages(...)` en `infra/app.py`.
+
 ## Pruebas y análisis estático (obligatorios antes de push)
 
 ```bash
@@ -182,6 +212,8 @@ Dos pruebas son **críticas** y el pipeline las convierte en bloqueo de merge:
 | Idempotencia | `tests/test_idempotency.py` | Los duplicados se descartan por `hashPayload` **antes** de tocar OpenSearch/Neptune (100%). |
 | Tabla de verdad | `tests/test_truth_table.py` | Cliente en estado Inactivo ("I") → **NO** se crea la arista `:INTERSECTA`. |
 | Lambda Egress | `tests/test_lambda_egress.py` | La Lambda se activa con el evento de envío (directo, API GW o SQS) y escribe la tríada en S3. |
+| Contrato del payload | `tests/test_validacion_payload.py` | El mensaje debe traer los 10 campos críticos; los 11 campos complementarios no bloquean. |
+| Descarte a DLQ | `tests/test_consumer_dlq.py` | Estructura incompleta o JSON inválido → DLQ sin ejecutar el pipeline; errores transitorios → reintento. |
 | Orquestador | `tests/test_orchestrator.py` | El Paso 4 invoca la Lambda con la tríada y **no** confirma el mensaje SQS si el egress falla. |
 
 > El equipo de desarrollo implementa la lógica real dentro de `src/motor_reglas/core.py`;

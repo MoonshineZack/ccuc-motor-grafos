@@ -65,6 +65,8 @@ services:
       - ENDPOINT_URL=http://dev-localstack:4566
       - QUEUE_URL=http://dev-localstack:4566/000000000000/ccuc-novedades-prod.fifo
       - QUEUE_NAME=ccuc-novedades-prod.fifo
+      - DLQ_URL=http://dev-localstack:4566/000000000000/ccuc-novedades-dlq.fifo
+      - DLQ_NAME=ccuc-novedades-dlq.fifo
       - OPENSEARCH_URL=http://dev-opensearch:9200
       - GREMLIN_HOST=dev-gremlin
       - GREMLIN_PORT=8182
